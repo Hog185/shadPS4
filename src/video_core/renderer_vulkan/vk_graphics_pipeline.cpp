@@ -475,10 +475,14 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
             });
         }
     }
-    uses_push_descriptors = binding < instance.MaxPushDescriptors();
-    const auto flags = uses_push_descriptors
-                           ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
-                           : vk::DescriptorSetLayoutCreateFlagBits{};
+const vk::DescriptorSetLayoutCreateInfo desc_layout_ci = {
+    .flags = flags,
+    .bindingCount = static_cast<u32>(bindings.size()),
+    .pBindings = bindings.data(),
+};
+
+auto [layout_result, layout] = instance.GetDevice().createDescriptorSetLayoutUnique(desc_layout_ci);
+// Resulting layout is then used for pipeline creation
     const vk::DescriptorSetLayoutCreateInfo desc_layout_ci = {
         .flags = flags,
         .bindingCount = static_cast<u32>(bindings.size()),
