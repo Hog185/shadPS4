@@ -273,8 +273,59 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
                 new_info.size.width, new_info.size.height, new_info.num_samples,
                 cache_image.info.pixel_format, new_info.pixel_format, cache_image.GetImage(),
                 new_image.GetImage());
+        } else if (cache_image.info.num_samples > 1) {
+            const u32 num_layers =
+                std::min(cache_image.info.resources.layers, new_info.resources.layers);
+
+            scheduler.EndRendering();
+
+            cache_image.Transit(vk::ImageLayout::eTransferSrcOptimal,
+                                vk::AccessFlagBits2::eTransferRead, {});
+            new_image.Transit(vk::ImageLayout::eTransferDstOptimal,
+                              vk::AccessFlagBits2::eTransferWrite, {});
+
+            const vk::Offset3D src_offset_end{static_cast<s32>(cache_image.info.size.width),
+                                              static_cast<s32>(cache_image.info.size.height), 1};
+            const vk::Offset3D dst_offset_end{static_cast<s32>(new_info.size.width),
+                                              static_cast<s32>(new_info.size.height), 1};
+
+            boost::container::small_vector<vk::ImageBlit, 2> blit_regions;
+
+            vk::ImageBlit depth_blit{};
+            depth_blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+            depth_blit.srcSubresource.mipLevel = 0;
+            depth_blit.srcSubresource.baseArrayLayer = 0;
+            depth_blit.srcSubresource.layerCount = num_layers;
+            depth_blit.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+            depth_blit.srcOffsets[1] = src_offset_end;
+            depth_blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+            depth_blit.dstSubresource.mipLevel = 0;
+            depth_blit.dstSubresource.baseArrayLayer = 0;
+            depth_blit.dstSubresource.layerCount = num_layers;
+            depth_blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+            depth_blit.dstOffsets[1] = dst_offset_end;
+            blit_regions.push_back(depth_blit);
+
+            if (cache_image.info.props.has_stencil && new_info.props.has_stencil) {
+                vk::ImageBlit stencil_blit = depth_blit;
+                stencil_blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+                stencil_blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+                blit_regions.push_back(stencil_blit);
+            }
+
+            scheduler.CommandBuffer().blitImage(
+                cache_image.GetImage(), vk::ImageLayout::eTransferSrcOptimal, new_image.GetImage(),
+                vk::ImageLayout::eTransferDstOptimal, blit_regions, vk::Filter::eNearest);
+
+            new_image.Transit(
+                vk::ImageLayout::eGeneral,
+                vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {});
         } else {
-            LOG_WARNING(Render_Vulkan, "Unimplemented depth overlap copy");
+            LOG_WARNING(Render_Vulkan,
+                        "Unimplemented depth overlap copy: cache_samples={} new_samples={} "
+                        "cache_is_depth={} new_is_depth={}",
+                        cache_image.info.num_samples, new_info.num_samples,
+                        cache_image.info.props.is_depth, new_info.props.is_depth);
         }
 
         // Free the cache image.
