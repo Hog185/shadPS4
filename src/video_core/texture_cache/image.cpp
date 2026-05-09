@@ -213,34 +213,55 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
     auto& last_state = backing->state;
     auto& subresource_states = backing->subresource_states;
 
-    LOG_TRACE(Render_Vulkan, "GetBarriers: addr={:#x}, dst_layout={}, levels={}, layers={}, samples={}, partial={}",
-             info.guest_address, vk::to_string(dst_layout), info.resources.levels,
-             info.resources.layers, backing->num_samples, subres_range.has_value());
+    LOG_TRACE(Render_Vulkan,
+              "GetBarriers: addr={:#x}, dst_layout={}, levels={}, layers={}, samples={}, partial={}",
+              info.guest_address, vk::to_string(dst_layout), info.resources.levels,
+              info.resources.layers, backing->num_samples, subres_range.has_value());
 
     const bool needs_partial_transition =
         subres_range &&
         (subres_range->base != SubresourceBase{} || subres_range->extent != info.resources);
     const bool partially_transited = !subresource_states.empty();
 
+    // Prevent runaway spam / invalid iota ranges
+    if (subres_range) {
+        if (subres_range->extent.levels == 0 || subres_range->extent.layers == 0) {
+            LOG_ERROR(Render_Vulkan,
+                      "Invalid SubresourceRange extent: levels={}, layers={}, addr={:#x}",
+                      subres_range->extent.levels, subres_range->extent.layers, info.guest_address);
+            return {};
+        }
+
+        if (subres_range->base.level >= info.resources.levels ||
+            subres_range->base.layer >= info.resources.layers) {
+            LOG_ERROR(Render_Vulkan,
+                      "Invalid SubresourceRange base: mip={}/{}, layer={}/{}, addr={:#x}",
+                      subres_range->base.level, info.resources.levels,
+                      subres_range->base.layer, info.resources.layers,
+                      info.guest_address);
+            return {};
+        }
+    }
+
     Barriers barriers;
     if (needs_partial_transition || partially_transited) {
         if (!partially_transited) {
             const u32 required_size = info.resources.levels * info.resources.layers;
-            LOG_TRACE(Render_Vulkan, "Initializing subresource states: size={}, levels={}, layers={}",
-                     required_size, info.resources.levels, info.resources.layers);
+            LOG_TRACE(Render_Vulkan,
+                      "Initializing subresource states: size={}, levels={}, layers={}",
+                      required_size, info.resources.levels, info.resources.layers);
+
             if (info.resources.levels == 0 || info.resources.layers == 0) {
                 LOG_ERROR(Render_Vulkan,
-                         "Invalid resource dimensions: levels={}, layers={}, addr={:#x}",
-                         info.resources.levels, info.resources.layers, info.guest_address);
-                return barriers;
+                          "Invalid resource dimensions: levels={}, layers={}, addr={:#x}",
+                          info.resources.levels, info.resources.layers, info.guest_address);
+                return {};
             }
+
             subresource_states.resize(required_size);
             std::fill(subresource_states.begin(), subresource_states.end(), last_state);
         }
 
-        // In case of partial transition, we need to change the specified subresources only.
-        // Otherwise all subresources need to be set to the same state so we can use a full
-        // resource transition for the next time.
         const auto mips =
             needs_partial_transition
                 ? std::ranges::views::iota(
@@ -248,6 +269,7 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
                       std::min(subres_range->base.level + subres_range->extent.levels,
                                info.resources.levels))
                 : std::views::iota(0u, info.resources.levels);
+
         const auto layers =
             needs_partial_transition
                 ? std::ranges::views::iota(
@@ -258,28 +280,32 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
 
         for (u32 mip : mips) {
             for (u32 layer : layers) {
-                // NOTE: these loops may produce a lot of small barriers.
-                // If this becomes a problem, we can optimize it by merging adjacent barriers.
+                // Extra safety (should never trigger now, but protects against corruption)
                 if (mip >= info.resources.levels || layer >= info.resources.layers) {
-                    LOG_WARNING(Render_Vulkan,
-                               "Subresource out of bounds: mip={}/{}, layer={}/{}, addr={:#x}",
-                               mip, info.resources.levels, layer, info.resources.layers, info.guest_address);
-                    continue;
+                    LOG_ERROR(Render_Vulkan,
+                              "Subresource out of bounds (loop): mip={}/{}, layer={}/{}, addr={:#x}",
+                              mip, info.resources.levels, layer, info.resources.layers,
+                              info.guest_address);
+                    return barriers;
                 }
+
                 const auto subres_idx = mip * info.resources.layers + layer;
                 if (subres_idx >= subresource_states.size()) {
                     LOG_ERROR(Render_Vulkan,
-                             "Subresource index {} >= size {}. mip={}, layer={}, levels={}, layers={}, addr={:#x}, samples={}",
-                             subres_idx, subresource_states.size(), mip, layer,
-                             info.resources.levels, info.resources.layers, info.guest_address, info.num_samples);
-                    continue;
+                              "Subresource index {} >= size {}. mip={}, layer={}, levels={}, layers={}, addr={:#x}, samples={}",
+                              subres_idx, subresource_states.size(), mip, layer,
+                              info.resources.levels, info.resources.layers, info.guest_address,
+                              info.num_samples);
+                    return barriers;
                 }
+
                 auto& state = subresource_states[subres_idx];
 
                 constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
                                              vk::AccessFlagBits2::eShaderWrite |
                                              vk::AccessFlagBits2::eMemoryWrite;
                 const bool is_write = static_cast<bool>(state.access_mask & write_flags);
+
                 if (state.layout != dst_layout || state.access_mask != dst_mask || is_write) {
                     barriers.emplace_back(vk::ImageMemoryBarrier2{
                         .srcStageMask = state.pl_stage,
@@ -299,6 +325,7 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
                             .layerCount = 1,
                         },
                     });
+
                     state.layout = dst_layout;
                     state.access_mask = dst_mask;
                     state.pl_stage = dst_stage;
@@ -309,11 +336,13 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
         if (!needs_partial_transition) {
             subresource_states.clear();
         }
-    } else { // Full resource transition
+
+    } else {
         constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
                                      vk::AccessFlagBits2::eShaderWrite |
                                      vk::AccessFlagBits2::eMemoryWrite;
         const bool is_write = static_cast<bool>(last_state.access_mask & write_flags);
+
         if (last_state.layout == dst_layout && last_state.access_mask == dst_mask && !is_write) {
             return {};
         }
@@ -347,7 +376,17 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
 
 void Image::Transit(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                     std::optional<SubresourceRange> range, vk::CommandBuffer cmdbuf /*= {}*/) {
-    // Adjust pipieline stage
+
+    if (range) {
+        LOG_WARNING(Render_Vulkan,
+                    "Transit(range): addr={:#x} base.level={} base.layer={} extent.levels={} extent.layers={} img_levels={} img_layers={}",
+                    info.guest_address,
+                    range->base.level, range->base.layer,
+                    range->extent.levels, range->extent.layers,
+                    info.resources.levels, info.resources.layers);
+    }
+
+    // Adjust pipeline stage
     const vk::PipelineStageFlags2 dst_pl_stage =
         (dst_mask == vk::AccessFlagBits2::eTransferRead ||
          dst_mask == vk::AccessFlagBits2::eTransferWrite)
@@ -360,10 +399,10 @@ void Image::Transit(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
     }
 
     if (!cmdbuf) {
-        // When using external cmdbuf you are responsible for ending rp.
         scheduler->EndRendering();
         cmdbuf = scheduler->CommandBuffer();
     }
+
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .imageMemoryBarrierCount = static_cast<u32>(barriers.size()),
         .pImageMemoryBarriers = barriers.data(),
