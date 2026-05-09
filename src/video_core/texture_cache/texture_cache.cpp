@@ -377,11 +377,13 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         // Size and resources are less than or equal, use image view.
         if (image_info.pixel_format != cache_image.info.pixel_format ||
             image_info.guest_size <= cache_image.info.guest_size) {
-            auto result_id = merged_image_id ? merged_image_id : cache_image_id;
-            const auto& result_image = slot_images[result_id];
-            const bool is_compatible =
-                IsVulkanFormatCompatible(result_image.info.pixel_format, image_info.pixel_format);
-            return {is_compatible ? result_id : ImageId{}, -1, -1};
+            if (image_info.resources <= cache_image.info.resources) {
+                auto result_id = merged_image_id ? merged_image_id : cache_image_id;
+                const auto& result_image = slot_images[result_id];
+                const bool is_compatible = IsVulkanFormatCompatible(result_image.info.pixel_format,
+                                                                    image_info.pixel_format);
+                return {is_compatible ? result_id : ImageId{}, -1, -1};
+            }
         }
 
         // Size and resources are greater, expand the image.
