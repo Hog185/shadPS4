@@ -322,10 +322,11 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
                 vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eTransferRead, {});
         } else {
             LOG_WARNING(Render_Vulkan,
-                        "Unimplemented depth overlap copy: cache_samples={} new_samples={} "
-                        "cache_is_depth={} new_is_depth={}",
-                        cache_image.info.num_samples, new_info.num_samples,
-                        cache_image.info.props.is_depth, new_info.props.is_depth);
+                              "Unimplemented depth overlap copy: cache_samples={} new_samples={} "
+                              "cache_is_depth={} new_is_depth={}",
+                              cache_image.info.num_samples, new_info.num_samples,
+                              static_cast<bool>(cache_image.info.props.is_depth), 
+                              static_cast<bool>(new_info.props.is_depth));
         }
 
         // Free the cache image.
