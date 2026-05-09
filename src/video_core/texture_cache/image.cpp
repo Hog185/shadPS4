@@ -377,13 +377,16 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
 void Image::Transit(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                     std::optional<SubresourceRange> range, vk::CommandBuffer cmdbuf /*= {}*/) {
 
-    if (range) {
-        LOG_WARNING(Render_Vulkan,
-                    "Transit(range): addr={:#x} base.level={} base.layer={} extent.levels={} extent.layers={} img_levels={} img_layers={}",
-                    info.guest_address,
-                    range->base.level, range->base.layer,
-                    range->extent.levels, range->extent.layers,
-                    info.resources.levels, info.resources.layers);
+  if (range && (range->base.layer != 0 || range->base.level != 0 ||
+                range->extent.layers != info.resources.layers ||
+                range->extent.levels != info.resources.levels)) {
+      LOG_WARNING(Render_Vulkan,
+                  "Transit(range): addr={:#x} base.level={} base.layer={} extent.levels={} extent.layers={} img_levels={} img_layers={}",
+                  info.guest_address,
+                  range->base.level, range->base.layer,
+                  range->extent.levels, range->extent.layers,
+                  info.resources.levels, info.resources.layers);
+}
     }
 
     // Adjust pipeline stage
