@@ -243,13 +243,17 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
         // resource transition for the next time.
         const auto mips =
             needs_partial_transition
-                ? std::ranges::views::iota(subres_range->base.level,
-                                           subres_range->base.level + subres_range->extent.levels)
+                ? std::ranges::views::iota(
+                      subres_range->base.level,
+                      std::min(subres_range->base.level + subres_range->extent.levels,
+                               info.resources.levels))
                 : std::views::iota(0u, info.resources.levels);
         const auto layers =
             needs_partial_transition
-                ? std::ranges::views::iota(subres_range->base.layer,
-                                           subres_range->base.layer + subres_range->extent.layers)
+                ? std::ranges::views::iota(
+                      subres_range->base.layer,
+                      std::min(subres_range->base.layer + subres_range->extent.layers,
+                               info.resources.layers))
                 : std::views::iota(0u, info.resources.layers);
 
         for (u32 mip : mips) {
