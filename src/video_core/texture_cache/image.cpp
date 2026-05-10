@@ -747,24 +747,25 @@ void Image::CopyMip(Image& src_image, u32 mip, u32 slice) {
 
 void Image::Resolve(Image& src_image, const VideoCore::SubresourceRange& mrt0_range,
                     const VideoCore::SubresourceRange& mrt1_range) {
-    LOG_TRACE(Render_Vulkan, "Resolve: src_addr={:#x}, dst_addr={:#x}, src_layer={}, dst_layer={}",
-             src_image.info.guest_address, info.guest_address,
-             mrt0_range.base.layer, mrt1_range.base.layer);
-    if (mrt0_range.base.layer >= src_image.info.resources.layers ||
-        mrt1_range.base.layer >= info.resources.layers) {
-        LOG_ERROR(Render_Vulkan,
-                 "Invalid layer range in Resolve: src_layer={}/{}, dst_layer={}/{}, src_addr={:#x}, dst_addr={:#x}",
-                 mrt0_range.base.layer, src_image.info.resources.layers,
-                 mrt1_range.base.layer, info.resources.layers,
-                 src_image.info.guest_address, info.guest_address);
-        return;
-    }
+    // The PS4 GPU layer values in mrt ranges may not map 1:1 to Vulkan array layer
+    // indices — clamp them to valid range rather than using raw values. This prevents
+    // out-of-bounds Vulkan calls and bad barriers while still performing the resolve.
+    const u32 src_layer = std::min(mrt0_range.base.layer, src_image.info.resources.layers - 1);
+    const u32 dst_layer = std::min(mrt1_range.base.layer, info.resources.layers - 1);
+
+    // Build clamped ranges for Transit so GetBarriers stays in-bounds.
+    SubresourceRange clamped_src_range = mrt0_range;
+    clamped_src_range.base.layer = src_layer;
+    SubresourceRange clamped_dst_range = mrt1_range;
+    clamped_dst_range.base.layer = dst_layer;
+
     SetBackingSamples(1, false);
     scheduler->EndRendering();
 
     src_image.Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead,
-                      mrt0_range);
-    Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, mrt1_range);
+                      clamped_src_range);
+    Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite,
+            clamped_dst_range);
 
     const auto [src_layers, dst_layers] = SanitizeCopyLayers(src_image.info, info, 1);
     if (src_image.backing->num_samples == 1) {
@@ -772,14 +773,14 @@ void Image::Resolve(Image& src_image, const VideoCore::SubresourceRange& mrt0_ra
             .srcSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
-                .baseArrayLayer = mrt0_range.base.layer,
+                .baseArrayLayer = src_layer,
                 .layerCount = src_layers,
             },
             .srcOffset = {0, 0, 0},
             .dstSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
-                .baseArrayLayer = mrt1_range.base.layer,
+                .baseArrayLayer = dst_layer,
                 .layerCount = dst_layers,
             },
             .dstOffset = {0, 0, 0},
@@ -793,14 +794,14 @@ void Image::Resolve(Image& src_image, const VideoCore::SubresourceRange& mrt0_ra
             .srcSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
-                .baseArrayLayer = mrt0_range.base.layer,
+                .baseArrayLayer = src_layer,
                 .layerCount = src_layers,
             },
             .srcOffset = {0, 0, 0},
             .dstSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
-                .baseArrayLayer = mrt1_range.base.layer,
+                .baseArrayLayer = dst_layer,
                 .layerCount = dst_layers,
             },
             .dstOffset = {0, 0, 0},
