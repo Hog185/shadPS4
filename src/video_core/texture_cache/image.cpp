@@ -251,11 +251,16 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
                 subres_range->base.layer >= info.resources.layers) {
                 LOG_WARNING(Render_Vulkan,
                            "GetBarriers: subres_range base out of bounds: "
-                           "base.level={}/{}, base.layer={}/{}, addr={:#x} -- skipping",
+                           "base.level={}/{}, base.layer={}/{}, addr={:#x} -- clamping",
                            subres_range->base.level, info.resources.levels,
                            subres_range->base.layer, info.resources.layers,
                            info.guest_address);
-                return barriers;
+                
+                // Clamp the out-of-bounds requests to the highest valid index
+                subres_range->base.level = std::min(subres_range->base.level, 
+                                                    info.resources.levels > 0 ? info.resources.levels - 1 : 0);
+                subres_range->base.layer = std::min(subres_range->base.layer, 
+                                                    info.resources.layers > 0 ? info.resources.layers - 1 : 0);
             }
         }
         const auto mips =
