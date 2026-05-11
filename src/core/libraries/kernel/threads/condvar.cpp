@@ -141,7 +141,6 @@ int PthreadCond::Wait(PthreadMutexT* mutex, const OrbisKernelTimespec* abstime, 
             has_user_waiters = SleepqRemove(sq, curthread);
             break;
         }
-        UNREACHABLE();
     }
     SleepqUnlock(this);
     curthread->mutex_obj = nullptr;
