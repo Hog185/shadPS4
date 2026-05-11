@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/breadth_first_search.h"
@@ -288,14 +289,18 @@ static AttributeRegion GetAttributeRegionKind(IR::Inst* ring_access, const Shade
     u32 count = ring_access->Flags<u32>();
     if (count == 0) {
         return AttributeRegion::InputCP;
-    } else if (info.l_stage == LogicalStage::TessellationControl &&
-               runtime_info.hs_info.IsPassthrough()) {
-        ASSERT(count <= 1);
-        return AttributeRegion::PatchConst;
-    } else {
-        ASSERT(count <= 2);
-        return AttributeRegion(count);
     }
+    if (info.l_stage == LogicalStage::TessellationControl &&
+        runtime_info.hs_info.IsPassthrough()) {
+        LOG_DEBUG(Render_Recompiler, "Passthrough hull shader: ring access count = {}", count);
+        ASSERT(count <= 1);
+        LOG_DEBUG(Render_Recompiler, "Passthrough count assert passed");
+        return AttributeRegion::OutputCP;
+    }
+    LOG_DEBUG(Render_Recompiler, "Non-passthrough ring access count = {}", count);
+    ASSERT(count <= 2);
+    LOG_DEBUG(Render_Recompiler, "Region count assert passed");
+    return AttributeRegion(count);
 }
 
 static bool IsDivisibleByStride(IR::Value term, u32 stride) {
