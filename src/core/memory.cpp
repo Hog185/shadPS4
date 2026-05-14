@@ -557,7 +557,7 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
     } else if (False(flags & MemoryMapFlags::Fixed)) {
         // Find a free virtual addr to map
         alignment = alignment > 0 ? alignment : 16_KB;
-        virtual_addr = virtual_addr == 0 ? DEFAULT_MAPPING_BASE : virtual_addr;
+        virtual_addr = virtual_addr == 0 ? impl.UserVirtualBase() : virtual_addr;
         virtual_addr = SearchFree(virtual_addr, size, alignment);
         if (virtual_addr == -1) {
             // No suitable memory areas to map to
@@ -731,7 +731,7 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
             return ORBIS_KERNEL_ERROR_ENOMEM;
         }
     } else if (False(flags & MemoryMapFlags::Fixed)) {
-        virtual_addr = virtual_addr == 0 ? DEFAULT_MAPPING_BASE : virtual_addr;
+        virtual_addr = virtual_addr == 0 ? impl.UserVirtualBase() : virtual_addr;
         virtual_addr = SearchFree(virtual_addr, size, 16_KB);
         if (virtual_addr == -1) {
             // No suitable memory areas to map to
@@ -1373,7 +1373,7 @@ void MemoryManager::InvalidateMemory(const VAddr addr, const u64 size) const {
 
 VAddr MemoryManager::SearchFree(VAddr virtual_addr, u64 size, u32 alignment) {
     // Calculate the minimum and maximum addresses present in our address space.
-    auto min_search_address = impl.SystemManagedVirtualBase();
+    auto min_search_address = impl.UserVirtualBase();
     auto max_search_address = impl.UserVirtualBase() + impl.UserVirtualSize();
 
     // If the requested address is below the mapped range, start search from the lowest address
