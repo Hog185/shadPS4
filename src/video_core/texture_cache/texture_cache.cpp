@@ -330,7 +330,8 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
             const auto& result_image = slot_images[result_id];
             const bool is_compatible =
                 IsVulkanFormatCompatible(result_image.info.pixel_format, image_info.pixel_format);
-            return {is_compatible ? result_id : ImageId{}, -1, -1};
+            const bool has_enough_resources = result_image.info.resources >= image_info.resources;
+            return {(is_compatible && has_enough_resources) ? result_id : ImageId{}, -1, -1};
         }
 
         // Size and resources are greater, expand the image.
