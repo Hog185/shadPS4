@@ -970,7 +970,7 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     auto& write_image = texture_cache.GetImage(texture_cache.FindImage(write_desc));
 
     VideoCore::SubresourceRange sub_range;
-    sub_range.base.layer = 0;
+    sub_range.base.layer = liverpool->regs.depth_view.slice_start;
     sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - liverpool->regs.depth_view.slice_start;
 
     ScopeMarkerBegin(fmt::format(
