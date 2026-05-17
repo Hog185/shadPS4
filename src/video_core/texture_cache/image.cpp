@@ -231,21 +231,16 @@ Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 
         // In case of partial transition, we need to change the specified subresources only.
         // Otherwise all subresources need to be set to the same state so we can use a full
         // resource transition for the next time.
-        const u32 mip_begin = needs_partial_transition
-                                  ? std::min(subres_range->base.level, info.resources.levels)
-                                  : 0u;
+        const u32 mip_begin = needs_partial_transition ? subres_range->base.level : 0u;
         const u32 mip_end = needs_partial_transition
                                 ? std::min(subres_range->base.level + subres_range->extent.levels,
                                            info.resources.levels)
                                 : info.resources.levels;
-        const u32 layer_begin = needs_partial_transition
-                                    ? std::min(subres_range->base.layer, info.resources.layers)
-                                    : 0u;
-        const u32 layer_end =
-            needs_partial_transition
-                ? std::min(subres_range->base.layer + subres_range->extent.layers,
-                           info.resources.layers)
-                : info.resources.layers;
+        const u32 layer_begin = needs_partial_transition ? subres_range->base.layer : 0u;
+        const u32 layer_end = needs_partial_transition
+                                  ? std::min(subres_range->base.layer + subres_range->extent.layers,
+                                             info.resources.layers)
+                                  : info.resources.layers;
 
         const auto mips = std::views::iota(mip_begin, mip_end);
         const auto layers = std::views::iota(layer_begin, layer_end);
