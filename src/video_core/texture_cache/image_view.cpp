@@ -71,8 +71,9 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::Image& image, const Shader::ImageReso
 }
 
 ImageViewInfo::ImageViewInfo(const AmdGpu::ColorBuffer& col_buffer) noexcept {
-    range.base.layer = col_buffer.BaseSlice();
-    range.extent.layers = col_buffer.NumSlices() - range.base.layer;
+    const u32 base_slice = col_buffer.BaseSlice();
+    range.base.layer = 0;
+    range.extent.layers = col_buffer.NumSlices() - base_slice;
     type = range.extent.layers > 1 ? AmdGpu::ImageType::Color2DArray : AmdGpu::ImageType::Color2D;
     format =
         Vulkan::LiverpoolToVK::SurfaceFormat(col_buffer.GetDataFmt(), col_buffer.GetNumberFmt());
@@ -83,8 +84,9 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::De
     format = Vulkan::LiverpoolToVK::DepthFormat(depth_buffer.z_info.format,
                                                 depth_buffer.stencil_info.format);
     is_storage = ctl.depth_write_enable;
-    range.base.layer = view.slice_start;
-    range.extent.layers = view.NumSlices() - range.base.layer;
+    const u32 base_slice = view.slice_start;
+    range.base.layer = 0;
+    range.extent.layers = view.NumSlices() - base_slice;
     type = range.extent.layers > 1 ? AmdGpu::ImageType::Color2DArray : AmdGpu::ImageType::Color2D;
 }
 
