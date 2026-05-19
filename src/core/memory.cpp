@@ -172,6 +172,7 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
         return false;
     }
 
+    const u8* src = static_cast<const u8*>(data);
     for (auto& vma : vmas_to_write) {
         auto start_in_vma = std::max<VAddr>(virtual_addr, vma.base) - vma.base;
         auto phys_handle = std::prev(vma.phys_areas.upper_bound(start_in_vma));
@@ -183,7 +184,8 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
                 std::max<u64>(start_in_vma, phys_handle->first) - phys_handle->first;
             u8* backing = impl.BackingBase() + phys_handle->second.base + start_in_dma;
             u64 copy_size = std::min<u64>(size, phys_handle->second.size - start_in_dma);
-            memcpy(backing, data, copy_size);
+            memcpy(backing, src, copy_size);
+            src += copy_size;
             size -= copy_size;
         }
     }
@@ -388,7 +390,7 @@ s32 MemoryManager::PoolCommit(VAddr virtual_addr, u64 size, MemoryProt prot, s32
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
 
-    if (pool_budget <= size) {
+    if (pool_budget < size) {
         // If there isn't enough pooled memory to perform the mapping, return ENOMEM
         LOG_ERROR(Kernel_Vmm, "Not enough pooled memory to perform mapping");
         return ORBIS_KERNEL_ERROR_ENOMEM;
@@ -550,8 +552,12 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
                    virtual_addr);
         auto vma = FindVMA(virtual_addr)->second;
         auto remaining_size = vma.base + vma.size - virtual_addr;
-        if (!vma.IsFree() || remaining_size < size) {
-            LOG_ERROR(Kernel_Vmm, "Unable to map {:#x} bytes at address {:#x}", size, virtual_addr);
+        if (vma.IsMapped() || remaining_size < size) {
+            LOG_ERROR(Kernel_Vmm,
+                      "Unable to map {:#x} bytes at address {:#x}: VMA state: type={}, "
+                      "IsMapped={}, base={:#x}, size={:#x}, remaining={:#x}, name='{}'",
+                      size, virtual_addr, static_cast<u32>(vma.type), vma.IsMapped(), vma.base,
+                      vma.size, remaining_size, vma.name);
             return ORBIS_KERNEL_ERROR_ENOMEM;
         }
     } else if (False(flags & MemoryMapFlags::Fixed)) {
