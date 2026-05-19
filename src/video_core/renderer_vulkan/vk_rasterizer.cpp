@@ -970,8 +970,10 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     auto& write_image = texture_cache.GetImage(texture_cache.FindImage(write_desc));
 
     VideoCore::SubresourceRange sub_range;
-    sub_range.base.layer = 0;
-    sub_range.extent.layers = liverpool->regs.depth_view.NumSlices() - liverpool->regs.depth_view.slice_start;
+    const u32 slice_start = liverpool->regs.depth_view.slice_start;
+    const u32 num_slices = liverpool->regs.depth_view.NumSlices();
+    sub_range.base.layer = slice_start < num_slices ? slice_start : 0u;
+    sub_range.extent.layers = num_slices - sub_range.base.layer;
 
     ScopeMarkerBegin(fmt::format(
         "DepthStencilCopy:DR={:#x}:SR={:#x}:DW={:#x}:SW={:#x}", regs.depth_buffer.DepthAddress(),
