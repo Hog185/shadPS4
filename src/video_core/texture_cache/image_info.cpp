@@ -134,7 +134,7 @@ ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& de
     size.depth = props.is_volume ? image.depth + 1 : 1;
     pitch = image.Pitch();
     resources.levels = image.NumLevels();
-    resources.layers = image.NumLayers();
+    resources.layers = std::max(image.NumLayers(), static_cast<u32>(image.last_array) + 1);
     num_samples = image.NumSamples();
     num_bits = NumBitsPerBlock(image.GetDataFmt());
     bank_swizzle = image.GetBankSwizzle();
