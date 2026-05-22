@@ -63,20 +63,20 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::Image& image, const Shader::ImageReso
     if (image.base_array < image.NumLayers()) {
         range.base.layer = image.base_array;
         if (image.base_array > 0) {
-            LOG_DEBUG(Render_Vulkan,
-                      "ImageViewInfo: array texture base_array={} NumLayers()={} "
-                      "(type={} depth={}) using base_array as layer",
-                      image.base_array, image.NumLayers(), magic_enum::enum_name(image.GetType()),
-                      image.depth);
+            LOG_WARNING(Render_Vulkan,
+                        "ImageViewInfo: array texture base_array={} NumLayers()={} "
+                        "(type={} depth={}) using base_array as layer",
+                        image.base_array, image.NumLayers(),
+                        magic_enum::enum_name(image.GetType()), image.depth);
         }
     } else {
         range.base.layer = 0u;
         if (image.base_array > 0) {
-            LOG_DEBUG(Render_Vulkan,
-                      "ImageViewInfo: non-array texture base_array={} >= NumLayers()={} "
-                      "(type={} depth={}) using local layer 0",
-                      image.base_array, image.NumLayers(), magic_enum::enum_name(image.GetType()),
-                      image.depth);
+            LOG_WARNING(Render_Vulkan,
+                        "ImageViewInfo: non-array texture base_array={} >= NumLayers()={} "
+                        "(type={} depth={}) using local layer 0",
+                        image.base_array, image.NumLayers(),
+                        magic_enum::enum_name(image.GetType()), image.depth);
         }
     }
     range.extent.levels = image.NumViewLevels(desc.is_array);
