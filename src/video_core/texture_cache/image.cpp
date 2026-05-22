@@ -729,21 +729,21 @@ void Image::Resolve(Image& src_image, const VideoCore::SubresourceRange& mrt0_ra
                       mrt0_range);
     Transit(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite, mrt1_range);
 
-    const auto [src_layers, dst_layers] = SanitizeCopyLayers(src_image.info, info, 1);
+    const auto copy_layers = std::min(mrt0_range.extent.layers, mrt1_range.extent.layers);
     if (src_image.backing->num_samples == 1) {
         const vk::ImageCopy region = {
             .srcSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
                 .baseArrayLayer = mrt0_range.base.layer,
-                .layerCount = src_layers,
+                .layerCount = copy_layers,
             },
             .srcOffset = {0, 0, 0},
             .dstSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
                 .baseArrayLayer = mrt1_range.base.layer,
-                .layerCount = dst_layers,
+                .layerCount = copy_layers,
             },
             .dstOffset = {0, 0, 0},
             .extent = {info.size.width, info.size.height, 1},
@@ -757,14 +757,14 @@ void Image::Resolve(Image& src_image, const VideoCore::SubresourceRange& mrt0_ra
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
                 .baseArrayLayer = mrt0_range.base.layer,
-                .layerCount = src_layers,
+                .layerCount = copy_layers,
             },
             .srcOffset = {0, 0, 0},
             .dstSubresource{
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .mipLevel = 0,
                 .baseArrayLayer = mrt1_range.base.layer,
-                .layerCount = dst_layers,
+                .layerCount = copy_layers,
             },
             .dstOffset = {0, 0, 0},
             .extent = {info.size.width, info.size.height, 1},
