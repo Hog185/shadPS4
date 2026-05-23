@@ -665,6 +665,12 @@ void EmitContext::DefineOutputs() {
             sample_mask = DefineVariable(TypeArray(U32[1], u32_one_value), spv::BuiltIn::SampleMask,
                                          spv::StorageClass::Output);
         }
+        if (info.stores.Get(IR::Attribute::StencilRef)) {
+            AddExtension("SPV_EXT_shader_stencil_export");
+            AddCapability(spv::Capability::StencilExportEXT);
+            stencil_ref = DefineVariable(S32[1], spv::BuiltIn::FragStencilRefEXT,
+                                         spv::StorageClass::Output);
+        }
         u32 num_render_targets = 0;
         for (u32 i = 0; i < IR::NumRenderTargets; i++) {
             const IR::Attribute mrt{IR::Attribute::RenderTarget0 + i};
