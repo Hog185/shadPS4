@@ -37,8 +37,9 @@ static std::pair<Id, bool> OutputAttrComponentType(EmitContext& ctx, IR::Attribu
     case IR::Attribute::RenderTargetIndex:
     case IR::Attribute::ViewportIndex:
     case IR::Attribute::SampleMask:
-    case IR::Attribute::StencilRef:
         return {ctx.U32[1], true};
+    case IR::Attribute::StencilRef:
+        return {ctx.S32[1], true};
     default:
         UNREACHABLE_MSG("Write attribute {}", attr);
     }
