@@ -247,6 +247,8 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
         return op_store(ctx.output_viewport_index);
     case IR::Attribute::Depth:
         return op_store(ctx.frag_depth);
+    case IR::Attribute::StencilRef:
+        return op_store(ctx.stencil_ref);
     case IR::Attribute::SampleMask:
         return op_store(ctx.OpAccessChain(ctx.output_u32, ctx.sample_mask, ctx.u32_zero_value));
     default:
