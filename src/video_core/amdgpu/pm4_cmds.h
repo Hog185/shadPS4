@@ -1221,4 +1221,35 @@ struct PM4CmdCondExec {
     }
 };
 
+/// Predication operation (IT_SET_PREDICATION PRED_OP field)
+enum class PredicationOp : u32 {
+    ClearPredication = 0x0,      ///< Disable predication
+    ZPassNotEqualZero = 0x1,     ///< Draw if occlusion sample count != 0
+    PrimCountNotEqualZero = 0x2, ///< Draw if primitive count != 0
+};
+
+/// IT_SET_PREDICATION — sets up conditional rendering based on a GPU-written memory value.
+/// Subsequent PM4 packets with the predicate bit set in their header are skipped by the CP
+/// when the condition specified by pred_op evaluated against the value at bool_addr fails.
+struct PM4CmdSetPredication {
+    PM4Type3Header header;
+    union {
+        u32 raw_lo;
+        /// bits [31:3] of the predication address (address is 8-byte aligned, bits [2:0] == 0)
+        BitField<3, 29, u32> bool_addr_lo;
+    };
+    union {
+        u32 raw_hi;
+        BitField<0, 16, u32> bool_addr_hi;             ///< bits [47:32] of the predication address
+        BitField<16, 4, u32> hint;                     ///< performance hint (informational, ignored)
+        BitField<24, 4, PredicationOp> pred_op;        ///< predication operation
+        BitField<31, 1, u32> draw_if_visible_override; ///< if 1, bypass predication and always draw
+    };
+
+    /// Returns the full 64-bit address of the u64 boolean value used for predication
+    VAddr Address() const {
+        return (u64(bool_addr_lo.Value()) << 3) | (u64(bool_addr_hi.Value()) << 32);
+    }
+};
+
 } // namespace AmdGpu
