@@ -254,6 +254,23 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
+            // If this packet has the predicate bit set, check the current predication condition.
+            // On real hardware the CP evaluates the condition and skips the packet if it fails.
+            if (header->type3.predicate == PM4Predicate::PredEnable &&
+                predication_state.active && !predication_state.draw_if_visible_override) {
+                const u64 pred_value =
+                    *reinterpret_cast<const u64*>(predication_state.address);
+                // ops 1 (ZPassNotEqualZero) and 2 (PrimCountNotEqualZero): draw if value != 0.
+                // Any other op defaults to always drawing.
+                const bool condition_passes =
+                    (predication_state.op == 1u || predication_state.op == 2u)
+                        ? (pred_value != 0u)
+                        : true;
+                if (!condition_passes) {
+                    dcb = NextPacket(dcb, count + 1);
+                    continue;
+                }
+            }
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -409,7 +426,17 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetPredication: {
-                LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
+                const auto* set_pred = reinterpret_cast<const PM4CmdSetPredication*>(header);
+                const u32 op = static_cast<u32>(set_pred->pred_op.Value());
+                if (op == static_cast<u32>(PredicationOp::ClearPredication)) {
+                    predication_state.active = false;
+                } else {
+                    predication_state.active = true;
+                    predication_state.address = set_pred->Address();
+                    predication_state.op = op;
+                    predication_state.draw_if_visible_override =
+                        set_pred->draw_if_visible_override.Value() != 0;
+                }
                 break;
             }
             case PM4ItOpcode::IndexType: {
