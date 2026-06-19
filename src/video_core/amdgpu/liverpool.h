@@ -202,6 +202,15 @@ private:
     u32 num_counter_pairs{};
     u64 pixel_counter{};
 
+    /// Predication state, updated by IT_SET_PREDICATION.
+    /// Subsequent packets with predicate=1 in their PM4 header are skipped when condition fails.
+    struct {
+        bool active{false};
+        VAddr address{0};
+        u32 op{0};                       ///< AmdGpu::PredicationOp cast to u32
+        bool draw_if_visible_override{false};
+    } predication_state{};
+
     struct ConstantEngine {
         void Reset() {
             ce_count = 0;
