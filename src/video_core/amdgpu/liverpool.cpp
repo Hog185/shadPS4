@@ -254,6 +254,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
+            // Predication state is tracked via IT_SET_PREDICATION but packet-level skipping is
+            // not yet safe: the predication address may point into GPU memory that the background
+            // streaming threads can unmap at any time, causing a segfault on CPU dereference.
+            // TODO: once occlusion query results are written correctly and memory safety is
+            // guaranteed, re-enable conditional skipping here.
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -409,7 +414,32 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetPredication: {
-                LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
+                const auto* set_pred = reinterpret_cast<const PM4CmdSetPredication*>(header);
+                const u32 op = static_cast<u32>(set_pred->pred_op.Value());
+                if (op == static_cast<u32>(PredicationOp::ClearPredication)) {
+                    predication_state.active = false;
+                    if (rasterizer) {
+                        rasterizer->EndPredication();
+                    }
+                } else {
+                    predication_state.active = true;
+                    predication_state.address = set_pred->Address();
+                    predication_state.op = op;
+                    predication_state.draw_if_visible_override =
+                        set_pred->draw_if_visible_override.Value() != 0;
+                    if (rasterizer) {
+                        if (!predication_state.draw_if_visible_override) {
+                            // ops 1 (ZPassNotEqualZero) and 2 (PrimCountNotEqualZero): draw if
+                            // value != 0, which maps to non-inverted conditional rendering.
+                            rasterizer->BeginPredication(predication_state.address, false);
+                        } else {
+                            // draw_if_visible_override means "always draw, ignore the result".
+                            // End any previously active predication scope — BeginPredication
+                            // is not called so it won't close it for us.
+                            rasterizer->EndPredication();
+                        }
+                    }
+                }
                 break;
             }
             case PM4ItOpcode::IndexType: {
