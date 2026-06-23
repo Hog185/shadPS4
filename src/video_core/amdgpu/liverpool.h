@@ -220,6 +220,13 @@ private:
         static std::array<u8, 48_KB> constants_heap;
     } cblock{};
 
+    struct PredicationState {
+        bool  active{false};
+        VAddr address{0};
+        u32   op{0};
+        bool  draw_if_visible_override{false};
+    } predication_state{};
+
     Vulkan::Rasterizer* rasterizer{};
     Libraries::VideoOut::VideoOutPort* vo_port{};
     std::jthread process_thread{};
