@@ -428,6 +428,12 @@ public:
                image_2d_view_of_3d_features.sampler2DViewOf3D;
     }
 
+    /// Returns true when VK_EXT_conditional_rendering is supported.
+    /// This enables GPU-side predication via vkCmdBeginConditionalRenderingEXT.
+    bool IsConditionalRenderingSupported() const {
+        return conditional_rendering;
+    }
+
     /// Returns whether the device can report memory usage.
     bool CanReportMemoryUsage() const {
         return supports_memory_budget;
@@ -517,6 +523,7 @@ private:
     bool image_2d_view_of_3d{};
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
+    bool conditional_rendering{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;
 };
