@@ -69,6 +69,17 @@ public:
     void Finish();
     void OnSubmit();
 
+    /// Begins GPU-side conditional rendering using VK_EXT_conditional_rendering.
+    /// All subsequent predicated draw/dispatch commands are discarded by the GPU if the value
+    /// at |address| fails the condition. Must be matched by a call to EndPredication().
+    /// @param address  Guest virtual address of the u64 predication value (written by occlusion
+    ///                 query or EventWrite). Currently unused — fake counters always pass.
+    /// @param inverted When true uses VK_CONDITIONAL_RENDERING_INVERTED_BIT_EXT (draw if zero).
+    void BeginPredication(VAddr address, bool inverted);
+
+    /// Ends the current GPU-side conditional rendering scope opened by BeginPredication().
+    void EndPredication();
+
     PipelineCache& GetPipelineCache() {
         return pipeline_cache;
     }
@@ -146,6 +157,16 @@ private:
     boost::container::static_vector<ImageBindingInfo, Shader::NUM_IMAGES> image_bindings;
     bool fault_process_pending{};
     bool attachment_feedback_loop{};
+
+    // VK_EXT_conditional_rendering — GPU-side predication support.
+    // A tiny host-visible buffer holds the u64 predication value; we write it from the CPU
+    // and hand it to vkCmdBeginConditionalRenderingEXT so the GPU evaluates the condition.
+    bool          predication_active{false};
+    bool          predication_inverted{false};  ///< saved to re-open scope after cmd buf boundary
+    VAddr         predication_guest_addr{0};    ///< saved to re-open scope after cmd buf boundary
+    VkBuffer      predication_buffer{VK_NULL_HANDLE};
+    VmaAllocation predication_allocation{};
+    u64*          predication_mapped_data{nullptr};
 };
 
 } // namespace Vulkan
