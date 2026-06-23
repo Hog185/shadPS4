@@ -13,6 +13,8 @@
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include <mutex>
+#include <vk_mem_alloc.h>
 
 #ifdef MemoryBarrier
 #undef MemoryBarrier
@@ -42,9 +44,35 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_,
         liverpool->BindRasterizer(this);
     }
     memory->SetRasterizer(this);
+
+    // Allocate the tiny host-visible buffer used for VK_EXT_conditional_rendering.
+    // 8 bytes holds one u64 predication value which we write from the CPU side.
+    if (instance.IsConditionalRenderingSupported()) {
+        const VkBufferCreateInfo pred_buf_ci = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size  = sizeof(u64),
+            .usage = VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT,
+        };
+        const VmaAllocationCreateInfo pred_alloc_ci = {
+            .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        };
+        VmaAllocationInfo pred_alloc_info{};
+        vmaCreateBuffer(instance.GetAllocator(), &pred_buf_ci, &pred_alloc_ci,
+                        &predication_buffer, &predication_allocation, &pred_alloc_info);
+        predication_mapped_data = static_cast<u64*>(pred_alloc_info.pMappedData);
+    }
 }
 
-Rasterizer::~Rasterizer() = default;
+Rasterizer::~Rasterizer() {
+    // Do NOT call EndPredication() here: Presenter::~Presenter() resets the scheduler's command
+    // buffers in its destructor body before member destructors run, so the command buffer is
+    // already invalid by the time ~Rasterizer() executes.
+    if (predication_buffer != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(instance.GetAllocator(), predication_buffer, predication_allocation);
+    }
+}
 
 void Rasterizer::CpSync() {
     scheduler.EndRendering();
@@ -57,6 +85,75 @@ void Rasterizer::CpSync() {
     cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                            vk::PipelineStageFlagBits::eDrawIndirect,
                            vk::DependencyFlagBits::eByRegion, ib_barrier, {}, {});
+}
+
+void Rasterizer::BeginPredication(VAddr address, bool inverted) {
+    if (!instance.IsConditionalRenderingSupported() || !predication_mapped_data) {
+        return;
+    }
+    // Close any existing predication scope before opening a new one.
+    EndPredication();
+
+    // vkCmdBeginConditionalRenderingEXT has Render Pass Scope: Both — no EndRendering() needed.
+
+    // Save parameters so Flush()/Finish() can re-open the scope on the next command buffer.
+    predication_guest_addr = address;
+    predication_inverted   = inverted;
+
+    // Write the predication value from the CPU side. The current occlusion emulation in
+    // EventWrite(PixelPipeStatDump) always writes non-zero values (bit 63 set via
+    // OcclusionCounterValidMask), so PRED_OP=1 (draw if value != 0) will always pass and
+    // no geometry is actually culled. This is intentional while occlusion queries are faked.
+    // TODO: replace with vkCmdCopyBuffer from the real GPU query result at |address| once
+    // native occlusion query support is implemented.
+    *predication_mapped_data = inverted ? 0ULL : 1ULL;
+
+    // Flush the host write in case VMA chose non-HOST_COHERENT memory.
+    // vmaFlushAllocation is a no-op when the memory is already coherent.
+    vmaFlushAllocation(instance.GetAllocator(), predication_allocation, 0, sizeof(u64));
+
+    static std::once_flag predication_warned;
+    std::call_once(predication_warned, [] {
+        LOG_WARNING(Render_Vulkan,
+                    "IT_SET_PREDICATION: GPU-side conditional rendering is active via "
+                    "VK_EXT_conditional_rendering, but occlusion query results are faked "
+                    "(EventWrite always writes non-zero values). All predicated draws will "
+                    "execute regardless of actual GPU visibility — no occlusion culling occurs "
+                    "until native occlusion query emulation is implemented.");
+    });
+    LOG_DEBUG(Render_Vulkan, "BeginPredication: addr={:#x} condition={}",
+              address, inverted ? "draw_if_zero" : "draw_if_nonzero");
+
+    const auto cmdbuf = scheduler.CommandBuffer();
+
+    // Ensure the host write above is visible to the conditional rendering engine before
+    // vkCmdBeginConditionalRenderingEXT reads the buffer.
+    const vk::MemoryBarrier host_barrier{
+        .srcAccessMask = vk::AccessFlagBits::eHostWrite,
+        .dstAccessMask = vk::AccessFlagBits::eConditionalRenderingReadEXT,
+    };
+    cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
+                           vk::PipelineStageFlagBits::eConditionalRenderingEXT,
+                           vk::DependencyFlagBits{}, host_barrier, {}, {});
+
+    const vk::ConditionalRenderingBeginInfoEXT cond_begin{
+        .buffer = predication_buffer,
+        .offset = 0,
+        .flags  = inverted ? vk::ConditionalRenderingFlagBitsEXT::eInverted
+                           : vk::ConditionalRenderingFlagBitsEXT{},
+    };
+    cmdbuf.beginConditionalRenderingEXT(cond_begin);
+    predication_active = true;
+}
+
+void Rasterizer::EndPredication() {
+    if (!predication_active) {
+        return;
+    }
+    // vkCmdEndConditionalRenderingEXT has Render Pass Scope: Both — no EndRendering() needed.
+    LOG_DEBUG(Render_Vulkan, "EndPredication");
+    scheduler.CommandBuffer().endConditionalRenderingEXT();
+    predication_active = false;
 }
 
 bool Rasterizer::FilterDraw() {
@@ -268,17 +365,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         std::tie(count_buffer, count_base) = buffer_cache.ObtainBuffer(count_address, 4, false);
     }
 
-    if (auto barrier = buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
-                                          vk::PipelineStageFlagBits2::eDrawIndirect)) {
-        buffer_barriers.emplace_back(*barrier);
-    }
-    if (count_buffer) {
-        if (auto barrier = count_buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
-                                                    vk::PipelineStageFlagBits2::eDrawIndirect)) {
-            buffer_barriers.emplace_back(*barrier);
-        }
-    }
-
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
@@ -359,11 +445,6 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 
     const auto [buffer, base] = buffer_cache.ObtainBuffer(address + offset, size, false);
 
-    if (auto barrier = buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
-                                          vk::PipelineStageFlagBits2::eDrawIndirect)) {
-        buffer_barriers.emplace_back(*barrier);
-    }
-
     scheduler.EndRendering();
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
 
@@ -375,14 +456,36 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 }
 
 u64 Rasterizer::Flush() {
+    // The Vulkan spec requires every vkCmdBeginConditionalRenderingEXT in a command buffer to
+    // have a matching vkCmdEndConditionalRenderingEXT in the same command buffer.
+    const bool reopen_predication = predication_active;
+    if (predication_active) {
+        scheduler.CommandBuffer().endConditionalRenderingEXT();
+        predication_active = false;
+    }
     const u64 current_tick = scheduler.CurrentTick();
     SubmitInfo info{};
     scheduler.Flush(info);
+    // Flush() is called at frame-end; the next frame re-issues all PM4 state so we do not
+    // need to re-open the scope here — Liverpool will receive a fresh SetPredication.
+    (void)reopen_predication;
     return current_tick;
 }
 
 void Rasterizer::Finish() {
+    // Same requirement as Flush() — close any open conditional rendering scope before submit.
+    // Unlike Flush(), Finish() is called mid-frame (e.g. EventWriteEos/GdsStore). The game
+    // continues sending draw commands in the same frame afterwards and will NOT re-send
+    // SetPredication, so we must re-open the scope on the new command buffer ourselves.
+    const bool reopen_predication = predication_active;
+    if (predication_active) {
+        scheduler.CommandBuffer().endConditionalRenderingEXT();
+        predication_active = false;
+    }
     scheduler.Finish();
+    if (reopen_predication) {
+        BeginPredication(predication_guest_addr, predication_inverted);
+    }
 }
 
 void Rasterizer::OnSubmit() {
