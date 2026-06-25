@@ -730,6 +730,18 @@ T Translator::GetSrc64(const InstOperand& operand) {
             value = ir.PackUint2x32(ir.CompositeConstruct(ir.GetVccLo(), ir.GetVccHi()));
         }
         break;
+    case OperandField::ExecLo: {
+        const IR::U64 exec_mask = ir.Ballot(ir.GetExec());
+        if constexpr (is_float) {
+            const IR::Value unpacked = ir.UnpackUint2x32(exec_mask);
+            value = ir.PackDouble2x32(ir.CompositeConstruct(
+                IR::U32{ir.CompositeExtract(unpacked, 0)},
+                IR::U32{ir.CompositeExtract(unpacked, 1)}));
+        } else {
+            value = exec_mask;
+        }
+        break;
+    }
     case OperandField::VccHi:
     default:
         UNREACHABLE();
