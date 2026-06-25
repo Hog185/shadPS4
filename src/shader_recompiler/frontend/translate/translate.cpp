@@ -731,7 +731,7 @@ T Translator::GetSrc64(const InstOperand& operand) {
         }
         break;
     case OperandField::ExecLo: {
-        const IR::U64 exec_mask = ir.Ballot(ir.GetExec());
+        const IR::U64 exec_mask{ir.Ballot(ir.GetExec())};
         if constexpr (is_float) {
             const IR::Value unpacked = ir.UnpackUint2x32(exec_mask);
             value = ir.PackDouble2x32(ir.CompositeConstruct(
