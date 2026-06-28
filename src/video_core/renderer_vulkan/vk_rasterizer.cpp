@@ -206,9 +206,9 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     }
     const auto state = BeginRendering(pipeline);
 
-    buffer_cache.BindVertexBuffers(*pipeline);
+    buffer_cache.BindVertexBuffers(*pipeline, buffer_barriers);
     if (is_indexed) {
-        buffer_cache.BindIndexBuffer(index_offset);
+        buffer_cache.BindIndexBuffer(index_offset, buffer_barriers);
     }
 
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
@@ -254,9 +254,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     }
     const auto state = BeginRendering(pipeline);
 
-    buffer_cache.BindVertexBuffers(*pipeline);
+    buffer_cache.BindVertexBuffers(*pipeline, buffer_barriers);
     if (is_indexed) {
-        buffer_cache.BindIndexBuffer(0);
+        buffer_cache.BindIndexBuffer(0, buffer_barriers);
     }
 
     const auto& [buffer, base] =
@@ -266,6 +266,17 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     u32 count_base{};
     if (count_address != 0) {
         std::tie(count_buffer, count_base) = buffer_cache.ObtainBuffer(count_address, 4, false);
+    }
+
+    if (auto barrier = buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
+                                          vk::PipelineStageFlagBits2::eDrawIndirect)) {
+        buffer_barriers.emplace_back(*barrier);
+    }
+    if (count_buffer) {
+        if (auto barrier = count_buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
+                                                    vk::PipelineStageFlagBits2::eDrawIndirect)) {
+            buffer_barriers.emplace_back(*barrier);
+        }
     }
 
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
@@ -347,6 +358,11 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     }
 
     const auto [buffer, base] = buffer_cache.ObtainBuffer(address + offset, size, false);
+
+    if (auto barrier = buffer->GetBarrier(vk::AccessFlagBits2::eIndirectCommandRead,
+                                          vk::PipelineStageFlagBits2::eDrawIndirect)) {
+        buffer_barriers.emplace_back(*barrier);
+    }
 
     scheduler.EndRendering();
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
@@ -703,20 +719,22 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
             if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
-                // If this image has an associated depth image, it's a stencil attachment.
-                // Redirect the access to the actual depth-stencil buffer.
                 image_id = depth_image_id;
                 image = &texture_cache.GetImage(image_id);
-                desc.view_info.range.base.level =
-                    std::min(desc.view_info.range.base.level, image->info.resources.levels - 1u);
-                desc.view_info.range.base.layer =
-                    std::min(desc.view_info.range.base.layer, image->info.resources.layers - 1u);
-                desc.view_info.range.extent.levels =
-                    std::min(desc.view_info.range.extent.levels,
-                             image->info.resources.levels - desc.view_info.range.base.level);
-                desc.view_info.range.extent.layers =
-                    std::min(desc.view_info.range.extent.layers,
-                             image->info.resources.layers - desc.view_info.range.base.layer);
+                const auto required_levels =
+                    desc.view_info.range.base.level + desc.view_info.range.extent.levels;
+                const auto required_layers =
+                    desc.view_info.range.base.layer + desc.view_info.range.extent.layers;
+                if (image->info.resources.levels < required_levels ||
+                    image->info.resources.layers < required_layers) {
+                    auto new_info = image->info;
+                    new_info.resources.levels =
+                        std::max(image->info.resources.levels, required_levels);
+                    new_info.resources.layers =
+                        std::max(image->info.resources.layers, required_layers);
+                    image_id = texture_cache.ExpandImage(new_info, image_id);
+                    image = &texture_cache.GetImage(image_id);
+                }
             }
             if (image->binding.is_bound) {
                 // The image is already bound. In case if it is about to be used as storage we
@@ -1060,10 +1078,6 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size) {
     }
     buffer_cache.ReadMemory(addr, size);
     return true;
-}
-
-void Rasterizer::ProcessDownloadImages() {
-    texture_cache.ProcessDownloadImages();
 }
 
 bool Rasterizer::IsMapped(VAddr addr, u64 size) {
