@@ -718,10 +718,6 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
             image_id = texture_cache.FindImage(desc);
             auto* image = &texture_cache.GetImage(image_id);
-            LOG_DEBUG(Render_Vulkan,
-                      "BindTextures: image_id={} addr={:#x} size={:#x} flags={:#x}",
-                      image_id.index, image->info.guest_address, image->info.guest_size,
-                      static_cast<u32>(image->flags));
             if (auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
                 // If this image has an associated depth image, it's a stencil attachment.
                 // Redirect the access to the actual depth-stencil buffer.
