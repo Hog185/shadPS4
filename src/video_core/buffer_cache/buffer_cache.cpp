@@ -412,15 +412,33 @@ std::pair<Buffer*, u32> BufferCache::ObtainBufferForImage(VAddr gpu_addr, u32 si
     const BufferId buffer_id = page_table[gpu_addr >> CACHING_PAGEBITS].buffer_id;
     if (buffer_id) {
         if (Buffer& buffer = slot_buffers[buffer_id]; buffer.IsInBounds(gpu_addr, size)) {
+            LOG_WARNING(Render_Vulkan,
+                        "ObtainBufferForImage[registered]: addr={:#x} size={:#x} buffer_id={} "
+                        "buffer_addr={:#x} buffer_size={:#x}",
+                        gpu_addr, size, buffer_id.index, buffer.CpuAddr(), buffer.SizeBytes());
             SynchronizeBuffer(buffer, gpu_addr, size, false, false);
             return {&buffer, buffer.Offset(gpu_addr)};
         }
+        LOG_WARNING(Render_Vulkan,
+                    "ObtainBufferForImage[registered-but-out-of-bounds]: addr={:#x} size={:#x} "
+                    "buffer_id={} buffer_addr={:#x} buffer_size={:#x}",
+                    gpu_addr, size, buffer_id.index, slot_buffers[buffer_id].CpuAddr(),
+                    slot_buffers[buffer_id].SizeBytes());
+    } else {
+        LOG_WARNING(Render_Vulkan, "ObtainBufferForImage[no-buffer-registered]: addr={:#x} size={:#x}",
+                    gpu_addr, size);
     }
     // If some buffer within was GPU modified create a full buffer to avoid losing GPU data.
     if (IsRegionGpuModified(gpu_addr, size)) {
+        LOG_WARNING(Render_Vulkan, "ObtainBufferForImage[gpu-modified-fallback]: addr={:#x} size={:#x}",
+                    gpu_addr, size);
         return ObtainBuffer(gpu_addr, size, false, false);
     }
     // In all other cases, just do a CPU copy to the staging buffer.
+    LOG_WARNING(Render_Vulkan,
+                "ObtainBufferForImage[RAW GUEST RAM FALLBACK]: addr={:#x} size={:#x} -- "
+                "no registered buffer and not marked gpu_modified, reading raw guest memory",
+                gpu_addr, size);
     const auto [data, offset] = staging_buffer.Map(size, 16);
     memory->CopySparseMemory(gpu_addr, data, size);
     staging_buffer.Commit();
@@ -594,6 +612,11 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
     const BufferId new_buffer_id =
         slot_buffers.insert(instance, scheduler, MemoryUsage::DeviceLocal, overlap.begin,
                             AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress, size);
+    LOG_WARNING(Render_Vulkan,
+                "CreateBuffer: requested_addr={:#x} requested_size={:#x} -> buffer_id={} "
+                "addr={:#x} size={:#x} num_overlaps_absorbed={}",
+                device_addr, wanted_size, new_buffer_id.index, overlap.begin, size,
+                overlap.ids.size());
     auto& new_buffer = slot_buffers[new_buffer_id];
     for (const BufferId overlap_id : overlap.ids) {
         JoinOverlap(new_buffer_id, overlap_id, !overlap.has_stream_leap);
@@ -881,6 +904,8 @@ void BufferCache::TouchBuffer(const Buffer& buffer) {
 
 void BufferCache::DeleteBuffer(BufferId buffer_id) {
     Buffer& buffer = slot_buffers[buffer_id];
+    LOG_WARNING(Render_Vulkan, "DeleteBuffer: buffer_id={} addr={:#x} size={:#x}", buffer_id.index,
+                buffer.CpuAddr(), buffer.SizeBytes());
     Unregister(buffer_id);
     scheduler.DeferOperation([this, buffer_id] { slot_buffers.erase(buffer_id); });
     buffer.is_deleted = true;
