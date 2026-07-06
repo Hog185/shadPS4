@@ -137,9 +137,6 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         image.hash = XXH3_64bits(addr, image.info.guest_size);
     }
-    LOG_DEBUG(Render_Vulkan, "MarkAsMaybeDirty addr={:#x} size={:#x} gpu_modified={}",
-              image.info.guest_address, image.info.guest_size,
-              bool(image.flags & ImageFlagBits::GpuModified));
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);
 }
@@ -183,8 +180,20 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
         if (image.info.guest_address != address) {
             return;
         }
-        // Ensure image is reuploaded when accessed again.
-        image.flags |= ImageFlagBits::GpuDirty;
+        LOG_WARNING(Render_Vulkan,
+                    "InvalidateMemoryFromGPU: addr={:#x} size={:#x} flags_before={:#x} "
+                    "was_gpu_modified={}",
+                    image.info.guest_address, image.info.guest_size,
+                    static_cast<u32>(image.flags),
+                    bool(image.flags & ImageFlagBits::GpuModified));
+        // Ensure image is reuploaded when accessed again. This write came from a formatted
+        // GPU buffer store (see BindBuffers), which means the GPU-side contents are now
+        // authoritative for this address. Without also setting GpuModified, RefreshImage's
+        // per-mip hash protection (which only engages when GpuModified && !GpuDirty) never
+        // activates for images that are exclusively written this way, causing them to be
+        // unconditionally reuploaded from stale/unrelated guest RAM every time they're
+        // subsequently sampled as a texture.
+        image.flags |= ImageFlagBits::GpuDirty | ImageFlagBits::GpuModified;
     });
 }
 
@@ -744,10 +753,6 @@ void TextureCache::RefreshImage(Image& image) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
         }
-        LOG_DEBUG(
-            Render_Vulkan,
-            "MaybeCpuDirty hash mismatch: addr={:#x} size={:#x} old_hash={:#x} new_hash={:#x}",
-            image.info.guest_address, image.info.guest_size, image.hash, hash);
         image.hash = hash;
     }
 
@@ -795,12 +800,6 @@ void TextureCache::RefreshImage(Image& image) {
         image.flags &= ~ImageFlagBits::Dirty;
         return;
     }
-
-    LOG_DEBUG(
-        Render_Vulkan,
-        "Reuploading image addr={:#x} size={:#x} mips={} gpu_modified={} gpu_dirty={} tick={}",
-        image.info.guest_address, image.info.guest_size, image_copies.size(), is_gpu_modified,
-        is_gpu_dirty, scheduler.CurrentTick());
 
     scheduler.EndRendering();
 
