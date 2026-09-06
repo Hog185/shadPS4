@@ -20,6 +20,7 @@ static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 #include <csignal>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <ucontext.h>
 #include <unistd.h>
 #ifdef ARCH_X86_64
 #include <Zydis/Formatter.h>
