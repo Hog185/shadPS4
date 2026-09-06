@@ -8,6 +8,8 @@
 #include "core/cpu_patches.h" // Windows static guest red-zone protection
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/threads/exception.h"
+#include "core/linker.h"
+#include "core/module.h"
 #include "core/signals.h"
 #include "emulator.h"
 
@@ -17,12 +19,193 @@ static constexpr DWORD MS_VC_EXCEPTION = 0x406D1388;
 #else
 #include <csignal>
 #include <pthread.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #ifdef ARCH_X86_64
 #include <Zydis/Formatter.h>
 #endif
 #endif
 
 namespace Core {
+
+namespace {
+Linker* g_linker = nullptr;
+
+#if defined(_WIN32)
+void GetContextRegs(void* context, VAddr& rip, VAddr& rbp) {
+    CONTEXT local_ctx{};
+    const CONTEXT* ctx;
+    if (context) {
+        ctx = static_cast<EXCEPTION_POINTERS*>(context)->ContextRecord;
+    } else {
+        RtlCaptureContext(&local_ctx);
+        ctx = &local_ctx;
+    }
+    rip = ctx->Rip;
+    rbp = ctx->Rbp;
+}
+
+bool IsReadable(VAddr addr, u64 size) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(reinterpret_cast<LPCVOID>(addr), &info, sizeof(info))) {
+        return false;
+    }
+    if (info.State != MEM_COMMIT || info.Protect == PAGE_NOACCESS ||
+        (info.Protect & PAGE_GUARD)) {
+        return false;
+    }
+    const auto region_end = reinterpret_cast<VAddr>(info.BaseAddress) + info.RegionSize;
+    return addr + size <= region_end;
+}
+#else
+void GetContextRegs(void* context, VAddr& rip, VAddr& rbp) {
+    ucontext_t local_ctx{};
+    const ucontext_t* ctx;
+    if (context) {
+        ctx = static_cast<ucontext_t*>(context);
+    } else {
+        getcontext(&local_ctx);
+        ctx = &local_ctx;
+    }
+#if defined(__APPLE__)
+    rip = ctx->uc_mcontext->__ss.__rip;
+    rbp = ctx->uc_mcontext->__ss.__rbp;
+#elif defined(__FreeBSD__)
+    rip = ctx->uc_mcontext.mc_rip;
+    rbp = ctx->uc_mcontext.mc_rbp;
+#else
+    rip = ctx->uc_mcontext.gregs[REG_RIP];
+    rbp = ctx->uc_mcontext.gregs[REG_RBP];
+#endif
+}
+
+bool IsReadable(VAddr addr, u64 size) {
+#if defined(__APPLE__) || defined(__FreeBSD__)
+    using MincoreVecT = char;
+#else
+    using MincoreVecT = unsigned char;
+#endif
+    const auto page_size = static_cast<u64>(sysconf(_SC_PAGESIZE));
+    const VAddr page_start = addr & ~(page_size - 1);
+    const VAddr page_end = (addr + size + page_size - 1) & ~(page_size - 1);
+    std::vector<MincoreVecT> vec((page_end - page_start) / page_size);
+    return mincore(reinterpret_cast<void*>(page_start), page_end - page_start, vec.data()) == 0;
+}
+#endif
+
+} // namespace
+
+void StackTracer::RegisterLinker(Linker* linker) {
+    g_linker = linker;
+}
+
+std::vector<VAddr> StackTracer::Capture(void* context, u32 max_frames) {
+    std::vector<VAddr> trace;
+#if defined(ARCH_X86_64)
+    VAddr rip{};
+    VAddr rbp{};
+    GetContextRegs(context, rip, rbp);
+    if (rip != 0) {
+        trace.push_back(rip);
+    }
+
+    VAddr prev_rbp = 0;
+    for (u32 i = 0; i < max_frames && rbp != 0; i++) {
+        // Standard SysV frame layout: [rbp+0] = saved rbp, [rbp+8] = return address.
+        if (!IsReadable(rbp, sizeof(VAddr) * 2)) {
+            break;
+        }
+        const VAddr saved_rbp = *reinterpret_cast<const VAddr*>(rbp);
+        const VAddr return_addr = *reinterpret_cast<const VAddr*>(rbp + sizeof(VAddr));
+        if (return_addr == 0) {
+            break;
+        }
+        trace.push_back(return_addr);
+
+        // The chain must move strictly upward; anything else means it's corrupt or we hit
+        // the bottom of the stack.
+        if (saved_rbp <= rbp || saved_rbp <= prev_rbp) {
+            break;
+        }
+        prev_rbp = rbp;
+        rbp = saved_rbp;
+    }
+#endif
+    return trace;
+}
+
+std::vector<StackTracer::Frame> StackTracer::Resolve(const std::vector<VAddr>& return_addrs) {
+    std::vector<Frame> frames;
+    frames.reserve(return_addrs.size());
+
+    for (const VAddr addr : return_addrs) {
+        Frame frame{.return_addr = addr};
+        Module* module = g_linker ? g_linker->FindByAddress(addr) : nullptr;
+
+        if (module) {
+            frame.has_module = true;
+            frame.module_name =
+                (module->IsSystemLib() ? "/system_ex/common/lib/" : "/app0/") + module->name;
+
+            const auto& info = module->info;
+            bool found_segment = false;
+            for (u32 s = 0; s < info.num_segments; s++) {
+                const auto& seg = info.segments[s];
+                if (addr >= seg.address && addr < seg.address + seg.size) {
+                    frame.segment_index = s;
+                    frame.segment_offset = addr - seg.address;
+                    found_segment = true;
+                    break;
+                }
+            }
+            if (!found_segment) {
+                frame.segment_offset = addr - module->GetBaseAddress();
+            }
+
+            VAddr best_addr = module->GetEntryAddress();
+            std::string best_name = "Entry";
+            for (const auto& sym : module->export_sym.GetSymbols()) {
+                if (sym.virtual_address != 0 && sym.virtual_address <= addr &&
+                    sym.virtual_address >= best_addr) {
+                    best_addr = sym.virtual_address;
+                    best_name = sym.nid_name;
+                }
+            }
+            if (addr >= best_addr) {
+                frame.has_symbol = true;
+                frame.symbol_name = std::move(best_name);
+                frame.symbol_offset = addr - best_addr;
+            }
+        }
+
+        frames.push_back(std::move(frame));
+    }
+
+    return frames;
+}
+
+std::string StackTracer::Format(const std::vector<Frame>& frames) {
+    std::string out;
+    for (const auto& frame : frames) {
+        if (!frame.has_module) {
+            out += fmt::format("  offset $-----|{:016X}  <unmapped>\n", frame.return_addr);
+            continue;
+        }
+        if (frame.has_symbol) {
+            out += fmt::format("  offset ${:05X}|{:06X}  {}:{}+${:06X}\n", frame.segment_index,
+                               frame.segment_offset, frame.module_name, frame.symbol_name,
+                               frame.symbol_offset);
+        } else {
+            out += fmt::format("  offset ${:05X}|{:06X}  {}\n", frame.segment_index,
+                               frame.segment_offset, frame.module_name);
+        }
+    }
+    return out;
+}
+
+std::string StackTracer::Dump(void* context, u32 max_frames) {
+    return Format(Resolve(Capture(context, max_frames)));
+}
 
 #if defined(_WIN32)
 
@@ -140,6 +323,7 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     const bool report_unhandled =
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
     if (report_unhandled) {
+        LOG_CRITICAL(Debug, "Guest crash backtrace:\n{}", StackTracer::Dump(pExp));
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
@@ -272,6 +456,7 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
             if (thread && thread->DispatchSignal(NativeToOrbisSignal(sig), info_p, context_p)) {
                 return;
             }
+            LOG_CRITICAL(Core, "Guest crash backtrace:\n{}", StackTracer::Dump(raw_context));
             UNREACHABLE_MSG("Unhandled access violation at code address {}: {} address {}",
                             fmt::ptr(code_address), is_write ? "Write to" : "Read from",
                             fmt::ptr(info->si_addr));
@@ -289,6 +474,7 @@ void SignalHandler(int sig, siginfo_t* info, void* raw_context) {
             return;
         }
 
+        LOG_CRITICAL(Core, "Guest crash backtrace:\n{}", StackTracer::Dump(raw_context));
         UNREACHABLE_MSG("Unhandled signal {} at code address {}", sig, fmt::ptr(code_address));
     }
     case SIGSLEEP: {

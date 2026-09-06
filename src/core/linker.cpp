@@ -25,6 +25,7 @@
 #include "core/libraries/sysmodule/sysmodule_internal.h"
 #include "core/linker.h"
 #include "core/memory.h"
+#include "core/signals.h"
 #include "core/tls.h"
 #include "ipc/ipc.h"
 
@@ -64,7 +65,9 @@ static PS4_SYSV_ABI void* RunMainEntry [[noreturn]] (EntryParams* params) {
 #endif
 }
 
-Linker::Linker() : memory{Memory::Instance()} {}
+Linker::Linker() : memory{Memory::Instance()} {
+    StackTracer::RegisterLinker(this);
+}
 
 Linker::~Linker() = default;
 
