@@ -226,6 +226,20 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
     if (recreate) {
         auto new_info = requested_info;
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
+        if (new_info.resources.levels != requested_info.resources.levels) {
+            // Level count changed: requested_info's layout can't be extended by scaling,
+            // so recompute the full mip chain the same way a fresh ImageInfo would.
+            new_info.UpdateSize();
+        } else if (new_info.resources.layers != requested_info.resources.layers) {
+            // Levels unchanged, layers grew: mips_layout[0].size == guest_size ==
+            // per_layer_size * old layers for both AmdGpu::Image- and ColorBuffer/DepthBuffer-
+            // derived infos (image_info.cpp), so rescale exactly instead of approximating
+            // via tile math and losing the hardware-reported slice size.
+            auto& mip0 = new_info.mips_layout[0];
+            const u32 per_layer_size = mip0.size / requested_info.resources.layers;
+            mip0.size = per_layer_size * new_info.resources.layers;
+            new_info.guest_size = mip0.size;
+        }
         const auto new_image_id =
             slot_images.insert(instance, scheduler, blit_helper, slot_image_views, new_info);
         RegisterImage(new_image_id);
