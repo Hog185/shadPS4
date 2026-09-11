@@ -681,6 +681,20 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
     if (src_buffer) {
         scheduler.EndRendering();
         const auto cmdbuf = scheduler.CommandBuffer();
+        // Scope the hazard barrier to the region actually being written instead of the
+        // whole buffer. Buffers in this cache are routinely merged into much larger
+        // allocations (see ResolveOverlaps' overlap-join and "stream leap" growth), so a
+        // [0, SizeBytes()) barrier here forces the GPU to drain/serialize against every
+        // other draw or dispatch that merely shares the same allocation, even though only
+        // a small sub-range of it is being patched. Since copies are produced in
+        // increasing address order by ForEachUploadRange, this is just their bounding box.
+        u64 sync_offset = copies.front().dstOffset;
+        u64 sync_end = sync_offset + copies.front().size;
+        for (const auto& copy : copies) {
+            sync_offset = std::min<u64>(sync_offset, copy.dstOffset);
+            sync_end = std::max<u64>(sync_end, copy.dstOffset + copy.size);
+        }
+        const u64 sync_size = sync_end - sync_offset;
         const vk::BufferMemoryBarrier2 pre_barrier = {
             .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
             .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite |
@@ -689,8 +703,8 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
             .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
             .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
             .buffer = buffer.Handle(),
-            .offset = 0,
-            .size = buffer.SizeBytes(),
+            .offset = sync_offset,
+            .size = sync_size,
         };
         const vk::BufferMemoryBarrier2 post_barrier = {
             .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
@@ -698,8 +712,8 @@ bool BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
             .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
             .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
             .buffer = buffer.Handle(),
-            .offset = 0,
-            .size = buffer.SizeBytes(),
+            .offset = sync_offset,
+            .size = sync_size,
         };
         cmdbuf.pipelineBarrier2(vk::DependencyInfo{
             .dependencyFlags = vk::DependencyFlagBits::eByRegion,
