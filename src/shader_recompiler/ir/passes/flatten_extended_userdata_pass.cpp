@@ -502,6 +502,8 @@ static bool IsAllowedOffsetInstruction(const IR::Inst* inst) {
     case IR::Opcode::UMin32:
     case IR::Opcode::UMax32:
     case IR::Opcode::BitFieldUExtract:
+    case IR::Opcode::ReadFirstLane:
+    case IR::Opcode::ReadLane:
         return true;
     default:
         return false;
@@ -559,6 +561,9 @@ static bool ComputeOffset(Xbyak::CodeGenerator& c, Xbyak::Reg32 reg, PassInfo& p
     case IR::Opcode::BitFieldUExtract:
         ABORT_ON_FAILURE(EmitComputeOffsetBitFieldUExtract(c, reg, pass_info, inst));
         return true;
+    case IR::Opcode::ReadFirstLane:
+    case IR::Opcode::ReadLane:
+        return ComputeOffset(c, reg, pass_info, inst->Arg(0));
     default:
         LOG_ERROR(Render_Recompiler, "Unexpected instruction for offset computation, {}",
                   magic_enum::enum_name(inst->GetOpcode()));
