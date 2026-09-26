@@ -436,6 +436,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     break;
                 }
 
+                auto* memory = Core::Memory::Instance();
+                if (!memory->IsValidMapping(reinterpret_cast<VAddr>(address), sizeof(u64))) {
+                    LOG_WARNING(Render, "IT_SET_PREDICATION address {:#x} is not mapped, ignoring",
+                                reinterpret_cast<VAddr>(address));
+                    predication_passed = true;
+                    break;
+                }
+
                 // polarity flips the result 0 means invert
                 const bool polarity = set_predication->pred_bool.Value() != 0;
 
