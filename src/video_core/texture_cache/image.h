@@ -160,6 +160,7 @@ public:
     std::deque<BackingImage> backing_images;
     BackingImage* backing{};
     boost::container::static_vector<u64, 16> mip_hashes{};
+    u32 gpu_dirty_mips{};
     u64 image_uid{};
     u64 lru_id{};
     u64 tick_accessed_last{};
