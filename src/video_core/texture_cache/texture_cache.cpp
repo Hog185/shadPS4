@@ -156,12 +156,34 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
 void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
-        // Only consider images that match base address.
-        // TODO: Maybe also consider subresources
-        if (image.info.guest_address != address) {
+        if (image.info.guest_address == address) {
+            // Ensure image is reuploaded when accessed again.
+            image.gpu_dirty_mips = ~0u;
+            image.flags |= ImageFlagBits::GpuDirty;
             return;
         }
-        // Ensure image is reuploaded when accessed again.
+        // The write hit only some subresources of the image (e.g. the mip tail).
+        const u32 levels = image.info.resources.levels;
+        u32 mask = 0;
+        if (image.info.resources.layers > 1) {
+            mask = (1u << levels) - 1;
+        } else {
+            const VAddr write_end = address + max_size;
+            for (u32 m = 0; m < levels; m++) {
+                const auto& mip = image.info.mips_layout[m];
+                const VAddr mip_begin = image.info.guest_address + mip.offset;
+                if (mip_begin < write_end && address < mip_begin + mip.size) {
+                    mask |= 1u << m;
+                }
+            }
+        }
+        if (mask == 0) {
+            return;
+        }
+        if (False(image.flags & ImageFlagBits::GpuDirty)) {
+            image.gpu_dirty_mips = 0;
+        }
+        image.gpu_dirty_mips |= mask;
         image.flags |= ImageFlagBits::GpuDirty;
     });
 }
@@ -731,7 +753,8 @@ void TextureCache::RefreshImage(Image& image) {
         const auto [mip_size, mip_pitch, mip_height, mip_offset] = image.info.mips_layout[m];
 
         // Protect GPU modified resources from accidental CPU reuploads.
-        if (is_gpu_modified && !is_gpu_dirty) {
+        const bool is_mip_gpu_dirty = is_gpu_dirty && (image.gpu_dirty_mips & (1u << m)) != 0;
+        if (is_gpu_modified && !is_mip_gpu_dirty) {
             const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
             const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);
             if (image.mip_hashes[m] == hash) {
@@ -759,6 +782,7 @@ void TextureCache::RefreshImage(Image& image) {
 
     if (image_copies.empty()) {
         image.flags &= ~ImageFlagBits::Dirty;
+        image.gpu_dirty_mips = 0;
         return;
     }
 
@@ -772,6 +796,7 @@ void TextureCache::RefreshImage(Image& image) {
     }
 
     runtime.UploadImage(&image, buffer, image_copies);
+    image.gpu_dirty_mips = 0;
 }
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
