@@ -247,6 +247,12 @@ s32 Linker::LoadModule(const std::filesystem::path& elf_name, bool is_dynamic) {
                elf_name.string());
 
     num_static_modules += !is_dynamic;
+    const u32 range_idx = module_range_count.load(std::memory_order_relaxed);
+    ASSERT_MSG(range_idx < MaxIndexedModules, "Too many loaded modules");
+    module_ranges[range_idx] = {module->GetBaseAddress(),
+                                module->GetBaseAddress() + module->aligned_base_size,
+                                module.get()};
+    module_range_count.store(range_idx + 1, std::memory_order_release);
     m_modules.emplace_back(std::move(module));
 
     Core::Devtools::Widget::ModuleList::AddModule(elf_name.filename().string(), elf_name);
@@ -284,10 +290,11 @@ s32 Linker::LoadAndStartModule(const std::filesystem::path& path, u64 args, cons
 }
 
 Module* Linker::FindByAddress(VAddr address) {
-    for (auto& module : m_modules) {
-        const VAddr base = module->GetBaseAddress();
-        if (address >= base && address < base + module->aligned_base_size) {
-            return module.get();
+    const u32 count = module_range_count.load(std::memory_order_acquire);
+    for (u32 i = 0; i < count; i++) {
+        const auto& r = module_ranges[i];
+        if (address >= r.base && address < r.end) {
+            return r.module;
         }
     }
     return nullptr;
