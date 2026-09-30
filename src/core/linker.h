@@ -4,6 +4,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include "core/libraries/kernel/threads.h"
@@ -172,6 +174,15 @@ private:
     u32 num_static_modules{};
     AppHeapAPI heap_api{};
     std::vector<std::unique_ptr<Module>> m_modules;
+
+    struct ModuleRange {
+        VAddr base;
+        VAddr end;
+        Module* module;
+    };
+    static constexpr u32 MaxIndexedModules = 256;
+    std::array<ModuleRange, MaxIndexedModules> module_ranges{};
+    std::atomic<u32> module_range_count{0};
     Loader::SymbolsResolver m_hle_symbols{};
 };
 
