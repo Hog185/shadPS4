@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <algorithm>
 #include <xxhash.h>
 
 #include "common/assert.h"
@@ -161,12 +160,6 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
             // Ensure image is reuploaded when accessed again.
             image.gpu_dirty_mips = ~0u;
             image.flags |= ImageFlagBits::GpuDirty;
-            LOG_WARNING(Render_Vulkan,
-                        "GPU write addr={:#x} size={:#x} -> image addr={:#x} size={:#x} {}x{} "
-                        "mips={} fmt={} mask=all",
-                        address, max_size, image.info.guest_address, image.info.guest_size,
-                        image.info.size.width, image.info.size.height, image.info.resources.levels,
-                        vk::to_string(image.info.pixel_format));
             return;
         }
         // The write hit only some subresources of the image (e.g. the mip tail).
@@ -192,12 +185,6 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
         }
         image.gpu_dirty_mips |= mask;
         image.flags |= ImageFlagBits::GpuDirty;
-        LOG_WARNING(Render_Vulkan,
-                    "GPU write addr={:#x} size={:#x} -> image addr={:#x} size={:#x} {}x{} mips={} "
-                    "fmt={} mask={:#x}",
-                    address, max_size, image.info.guest_address, image.info.guest_size,
-                    image.info.size.width, image.info.size.height, image.info.resources.levels,
-                    vk::to_string(image.info.pixel_format), mask);
     });
 }
 
@@ -767,14 +754,12 @@ void TextureCache::RefreshImage(Image& image) {
 
         // Protect GPU modified resources from accidental CPU reuploads.
         const bool is_mip_gpu_dirty = is_gpu_dirty && (image.gpu_dirty_mips & (1u << m)) != 0;
-        if (is_gpu_modified && !is_mip_gpu_dirty) {
-            const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
-            const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);
-            if (image.mip_hashes[m] == hash) {
-                continue;
-            }
-            image.mip_hashes[m] = hash;
+        const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address);
+        const u64 mip_hash = XXH3_64bits(mip_addr + mip_offset, mip_size);
+        if (is_gpu_modified && !is_mip_gpu_dirty && image.mip_hashes[m] == mip_hash) {
+            continue;
         }
+        image.mip_hashes[m] = mip_hash;
 
         const u32 extent_width = mip_pitch ? std::min(mip_pitch, width) : width;
         const u32 extent_height = mip_height ? std::min(mip_height, height) : height;
@@ -797,29 +782,6 @@ void TextureCache::RefreshImage(Image& image) {
         image.flags &= ~ImageFlagBits::Dirty;
         image.gpu_dirty_mips = 0;
         return;
-    }
-
-    if (image.info.props.is_block && image.info.guest_size >= 0x2000) {
-        u32 upload_mips = 0;
-        u32 zero_mips = 0;
-        const u8* base = std::bit_cast<u8*>(image.info.guest_address);
-        for (const auto& copy : image_copies) {
-            const u32 m = copy.imageSubresource.mipLevel;
-            const auto& mip = image.info.mips_layout[m];
-            upload_mips |= 1u << m;
-            if (mip.offset + mip.size <= image.info.guest_size &&
-                std::all_of(base + mip.offset, base + mip.offset + mip.size,
-                            [](u8 b) { return b == 0; })) {
-                zero_mips |= 1u << m;
-            }
-        }
-        LOG_WARNING(Render_Vulkan,
-                    "Upload addr={:#x} size={:#x} {}x{} mips={} fmt={} flags={:#x} upload={:#x} "
-                    "gpu_dirty={:#x} guest_zero={:#x}",
-                    image.info.guest_address, image.info.guest_size, image.info.size.width,
-                    image.info.size.height, image.info.resources.levels,
-                    vk::to_string(image.info.pixel_format), static_cast<u32>(image.flags),
-                    upload_mips, image.gpu_dirty_mips, zero_mips);
     }
 
     scheduler.EndRendering();
