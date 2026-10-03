@@ -119,6 +119,9 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
+    /// Sub-allocates blocks from large chunks to avoid one vkAllocateMemory per request.
+    std::pair<vk::DeviceMemory, u64> AllocateResidentBlocks(u64 num_blocks);
+
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
@@ -159,6 +162,11 @@ private:
         }
     };
     IntervalList<Backing> resident_ranges;
+
+    // Chunk currently backing newly resident blocks (bump allocated).
+    vk::DeviceMemory resident_chunk{};
+    u64 resident_chunk_used_blocks{};
+    u64 resident_chunk_total_blocks{};
 
     u32 arena_memory_type_index{};
     u32 block_size{};
