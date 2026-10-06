@@ -450,6 +450,39 @@ static std::string ExtractPathFromUrl(const std::string& url) {
     return url.substr(path_start);
 }
 
+static bool IsShadNetWebApiTarget(const SendRequestPlan& plan) {
+    if (!EmulatorSettings.IsShadNetEnabled()) {
+        return false;
+    }
+    const std::string server_str = EmulatorSettings.GetShadNetWebApiServer();
+    std::string_view server = server_str;
+    std::string scheme = "http";
+    if (const auto scheme_end = server.find("://"); scheme_end != std::string_view::npos) {
+        scheme.assign(server.substr(0, scheme_end));
+        server.remove_prefix(scheme_end + 3);
+    }
+    if (const auto slash = server.find('/'); slash != std::string_view::npos) {
+        server = server.substr(0, slash);
+    }
+    std::string host(server);
+    unsigned long port = (scheme == "https") ? 443 : 80;
+    if (const auto colon = host.rfind(':'); colon != std::string::npos) {
+        try {
+            port = std::stoul(host.substr(colon + 1));
+        } catch (...) {
+            return false;
+        }
+        host.resize(colon);
+    }
+    const auto lower = [](std::string v) {
+        std::transform(v.begin(), v.end(), v.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return v;
+    };
+    return lower(host) == lower(plan.host) && port == plan.port &&
+           lower(scheme) == lower(plan.scheme);
+}
+
 // Map common HTTP method codes to their name. Used for logging only.
 static const char* HttpMethodName(s32 method) {
     switch (method) {
@@ -1745,7 +1778,7 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         }
     }
 
-    const bool online = EmulatorSettings.IsConnectedToNetwork();
+    const bool online = EmulatorSettings.IsConnectedToNetwork() || IsShadNetWebApiTarget(plan);
     LOG_INFO(Lib_Http, "reqId={} dispatched to async worker [{} {} {}://{}:{}{}]", reqId,
              online ? "ONLINE" : "OFFLINE", HttpMethodName(plan.method), plan.scheme, plan.host,
              plan.port, plan.path);
