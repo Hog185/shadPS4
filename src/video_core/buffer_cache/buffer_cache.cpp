@@ -170,7 +170,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
     // For read-only buffers use device local stream buffer to reduce renderpass breaks.
-    if (!is_written && size <= STREAM_THRESHOLD && !IsRegionGpuModified(device_addr, size)) {
+    // Metadata surfaces are excluded, their contents are synthesized from the tracked image state.
+    const bool is_meta_read = is_texel_buffer && !is_written && texture_cache.IsMeta(device_addr);
+    if (!is_written && size <= STREAM_THRESHOLD && !is_meta_read &&
+        !IsRegionGpuModified(device_addr, size)) {
         const auto [data, offset] = stream_buffer.Map(size, instance.UniformMinAlignment());
         memory->CopySparseMemory(device_addr, data, size);
         stream_buffer.Commit();
@@ -359,6 +362,15 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
         if (*type == TextureCache::MetaType::HTile) {
             static constexpr u32 ZmaskUncompressed = 0xf;
             runtime.FillBuffer(arena, arena->Offset(device_addr), size, ZmaskUncompressed);
+            return true;
+        } else if (*type == TextureCache::MetaType::CMask) {
+            // Every 4-bit tile entry set to 0xf (expanded, not fast cleared), so shaders consume
+            // the actual image contents. Replicated nibbles keep the pattern format independent.
+            static constexpr u32 CmaskExpanded = 0xffffffff;
+            const u32 fill_size = Common::AlignDown(size, sizeof(u32));
+            if (fill_size != 0) {
+                runtime.FillBuffer(arena, arena->Offset(device_addr), fill_size, CmaskExpanded);
+            }
             return true;
         } else {
             LOG_WARNING(Render_Vulkan, "Unhandled metadata type {}", magic_enum::enum_name(*type));
