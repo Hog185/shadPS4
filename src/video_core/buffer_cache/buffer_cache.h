@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <vector>
 #include <boost/container/small_vector.hpp>
 
 #include "common/enum.h"
@@ -130,6 +131,10 @@ public:
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
+    /// Writes all queued BDA page table entries to the GPU with a single copy. Must be called
+    /// before any shader that dereferences guest pointers runs, and before every scheduler submit.
+    void FlushPendingPageTable();
+
 private:
     struct ArenaBinds {
         const Buffer* arena;
@@ -202,6 +207,11 @@ private:
     };
     ResidentPool resident_pool;
     u64 next_resident_pool_size{MIN_RESIDENT_POOL_SIZE};
+
+    // BDA page table updates queued by EnsureResident. Entry data lives in pending_pagetable_addrs
+    // and each copy's srcOffset is a byte offset into it until the flush rebases it onto staging.
+    std::vector<vk::DeviceAddress> pending_pagetable_addrs;
+    boost::container::small_vector<vk::BufferCopy, 16> pending_pagetable_copies;
 
     u32 arena_memory_type_index{};
     u32 block_size{};
