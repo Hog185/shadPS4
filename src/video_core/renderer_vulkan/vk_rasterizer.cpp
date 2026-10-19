@@ -756,6 +756,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
 void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
                              Shader::PushData& push_data) {
     const u64 alignment = instance.StorageMinAlignment();
+    const VideoCore::Buffer* const stream_buffer = &buffer_cache.GetStreamBuffer();
     for (const auto& desc : stage.buffers) {
         const auto src_access =
             vk::AccessFlagBits2::eShaderRead |
@@ -811,13 +812,14 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
             }
         } else {
             const auto vsharp = desc.GetSharp(stage);
-            if (vsharp.base_address == 0 || vsharp.GetSize() == 0) {
+            const u32 vsharp_size = vsharp.GetSize();
+            if (vsharp.base_address == 0 || vsharp_size == 0) {
                 buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
             } else {
-                const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize());
-                if (size != vsharp.GetSize()) {
-                    LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
-                              vsharp.GetSize(), size, stage.pgm_hash);
+                const u64 size = memory->ClampRangeSize(vsharp.base_address, vsharp_size);
+                if (size != vsharp_size) {
+                    LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}", vsharp_size,
+                              size, stage.pgm_hash);
                 }
                 VideoCore::ObtainBufferFlags flags = {};
                 if (desc.is_written) {
@@ -836,12 +838,17 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, Shader::Backend::Binding
                 }
                 push_data.AddOffset(binding.buffer, adjust);
                 buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
-                bound_buffers.emplace_back(buffer, offset, size, src_access);
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
-                needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
+                // The stream buffer is only ever written by the CPU, so there is no GPU access to
+                // order against.
+                if (buffer != stream_buffer) {
+                    bound_buffers.emplace_back(buffer, offset, size, src_access);
+                    needs_barrier |=
+                        runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
+                }
             }
         }
 
