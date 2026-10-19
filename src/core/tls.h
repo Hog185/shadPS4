@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include "common/types.h"
+#include "core/devtools/hle_profiler.h"
 #ifdef _WIN32
 #include <malloc.h>
 #endif
@@ -52,7 +53,25 @@ struct HostCallWrapperImpl;
 
 template <class ReturnType, class... Args, PS4_SYSV_ABI ReturnType (*func)(Args...)>
 struct HostCallWrapperImpl<func> {
+    /// Counters for the function profiler.
+    static inline Devtools::HleProfiler::FunctionStats stats{};
+
     static ReturnType PS4_SYSV_ABI wrap(Args... args) {
+        // Fast path while the profiler is closed.
+        if (!Devtools::HleProfiler::IsEnabled()) [[likely]] {
+            return func(args...);
+        }
+        return wrap_profiled(args...);
+    }
+
+    /// Bypasses the profiler frame for functions that read their own return address.
+    static ReturnType PS4_SYSV_ABI wrap_unprofiled(Args... args) {
+        return func(args...);
+    }
+
+private:
+    [[gnu::noinline]] static ReturnType PS4_SYSV_ABI wrap_profiled(Args... args) {
+        Devtools::HleProfiler::ScopedCall scope{stats};
         return func(args...);
     }
 };

@@ -18,6 +18,7 @@
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "widget/frame_dump.h"
 #include "widget/frame_graph.h"
+#include "widget/function_profiler.h"
 #include "widget/gpu_memory.h"
 #include "widget/memory_map.h"
 #include "widget/module_list.h"
@@ -51,6 +52,7 @@ static Widget::MemoryMapViewer memory_map;
 static Widget::ShaderList shader_list;
 static Widget::ModuleList module_list;
 static Widget::GpuMemoryViewer gpu_memory;
+static Widget::FunctionProfiler function_profiler;
 
 // clang-format off
 static std::string help_text =
@@ -129,6 +131,17 @@ void L::DrawMenuBar() {
         if (BeginMenu("Debug")) {
             MenuItem("Memory map", nullptr, &memory_map.open);
             MenuItem("Module list", nullptr, &module_list.open);
+            MenuItem("Function profiler", "Alt+F10", &function_profiler.open);
+            if (BeginMenu("Function profiler list size")) {
+                for (const int n : {25, 50, 75}) {
+                    char label[16];
+                    snprintf(label, sizeof(label), "Top %d", n);
+                    if (MenuItem(label, nullptr, function_profiler.top_n == n)) {
+                        function_profiler.top_n = n;
+                    }
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
 
@@ -322,6 +335,14 @@ static void LoadSettings(const char* line) {
         gpu_memory.open = i != 0;
         return;
     }
+    if (sscanf(line, "show_function_profiler=%d", &i) == 1) {
+        function_profiler.open = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_top=%d", &i) == 1) {
+        function_profiler.top_n = (i == 50 || i == 75) ? i : 25;
+        return;
+    }
     if (sscanf(line, "dump_frame_count=%d", &i) == 1) {
         dump_frame_count = i;
         return;
@@ -368,6 +389,8 @@ void L::SetupSettings() {
         buf->appendf("show_memory_map=%d\n", memory_map.open);
         buf->appendf("show_module_list=%d\n", module_list.open);
         buf->appendf("show_gpu_memory=%d\n", gpu_memory.open);
+        buf->appendf("show_function_profiler=%d\n", function_profiler.open);
+        buf->appendf("function_profiler_top=%d\n", function_profiler.top_n);
         buf->appendf("dump_frame_count=%d\n", dump_frame_count);
         buf->append("\n");
         buf->appendf("[%s][CmdList]\n", handler->TypeName);
@@ -402,6 +425,8 @@ void L::Draw() {
     if (IsKeyPressed(ImGuiKey_F10, false)) {
         if (io.KeyCtrl) {
             DebugState.IsShowingDebugMenuBar() ^= true;
+        } else if (io.KeyAlt) {
+            function_profiler.open ^= true;
         }
         visibility_toggled = true;
     }
@@ -452,6 +477,13 @@ void L::Draw() {
             DrawSimple();
         }
         End();
+    }
+
+    // Drawn independently of the advanced debug menu.
+    if (function_profiler.open || HleProfiler::IsEnabled()) {
+        PushFont(io.Fonts->Fonts[IMGUI_FONT_MONO]);
+        function_profiler.Draw();
+        PopFont();
     }
 
     if (DebugState.IsShowingDebugMenuBar()) {

@@ -755,6 +755,8 @@ set(DEV_TOOLS src/core/devtools/layer.cpp
               src/core/devtools/layer.h
               src/core/devtools/layer_extra.cpp
               src/core/devtools/options.cpp
+              src/core/devtools/hle_profiler.cpp
+              src/core/devtools/hle_profiler.h
               src/core/devtools/options.h
               src/core/devtools/gcn/gcn_context_regs.cpp
               src/core/devtools/gcn/gcn_op_names.cpp
@@ -766,6 +768,8 @@ set(DEV_TOOLS src/core/devtools/layer.cpp
               src/core/devtools/widget/frame_dump.h
               src/core/devtools/widget/frame_graph.cpp
               src/core/devtools/widget/frame_graph.h
+              src/core/devtools/widget/function_profiler.cpp
+              src/core/devtools/widget/function_profiler.h
               src/core/devtools/widget/gpu_memory.cpp
               src/core/devtools/widget/gpu_memory.h
               src/core/devtools/widget/imgui_memory_editor.h
