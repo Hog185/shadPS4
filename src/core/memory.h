@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
@@ -350,6 +351,7 @@ private:
     VMAMap vma_map;
     Common::SharedFirstMutex mutex{};
     std::mutex unmap_mutex{};
+    std::atomic<u64> vma_epoch{};
     u64 total_direct_size{};
     u64 total_flexible_size{};
     u64 flexible_usage{};
