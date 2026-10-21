@@ -499,7 +499,7 @@ void RegisterLib(Core::Loader::SymbolsResolver* sym) {
                  sceKernelGetFsSandboxRandomWord);
     LIB_FUNCTION("6xVpy0Fdq+I", "libkernel", 1, "libkernel", _sigprocmask);
     LIB_FUNCTION("Xjoosiw+XPI", "libkernel", 1, "libkernel", sceKernelUuidCreate);
-    LIB_FUNCTION("Ou3iL1abvng", "libkernel", 1, "libkernel", stack_chk_fail);
+    LIB_FUNCTION_UNPROFILED("Ou3iL1abvng", "libkernel", 1, "libkernel", stack_chk_fail);
     LIB_FUNCTION("9BcDykPmo1I", "libkernel", 1, "libkernel", __Error);
     LIB_FUNCTION("k+AXqu2-eBc", "libkernel", 1, "libkernel", posix_getpagesize);
     LIB_FUNCTION("k+AXqu2-eBc", "libScePosix", 1, "libkernel", posix_getpagesize);

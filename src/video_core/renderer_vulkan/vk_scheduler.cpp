@@ -13,7 +13,9 @@ namespace Vulkan {
 std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore},
+      gpu_profiler{instance.GetDevice(), instance.GetPhysicalDevice(),
+                   instance.GetGraphicsQueueFamilyIndex()} {
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
@@ -123,6 +125,7 @@ void Scheduler::Finish() {
 }
 
 void Scheduler::Wait(u64 tick) {
+    PROFILE_SCOPE("Scheduler::Wait (CPU waiting for GPU)");
     if (tick >= work_semaphore.CurrentTick()) {
         // Make sure we are not waiting for the current tick without signalling
         SubmitInfo info{};
@@ -134,6 +137,7 @@ void Scheduler::Wait(u64 tick) {
 void Scheduler::PopPendingOperations() {
     std::unique_lock lk(pending_ops_mutex);
     work_semaphore.Refresh();
+    gpu_profiler.Collect([this](u64 tick) { return work_semaphore.IsFree(tick); });
     while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         pending_ops.front().callback();
         pending_ops.pop();
@@ -150,6 +154,7 @@ void Scheduler::BeginSession() {
     };
     session.primary = command_pool.Commit();
     Check(session.primary.begin(begin_info));
+    gpu_profiler.BeginSession(session.primary);
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
@@ -179,10 +184,12 @@ void Scheduler::EndSession() {
     }
 
     EndRendering();
+    gpu_profiler.EndSession(session.primary);
     Check(session.primary.end());
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    PROFILE_SCOPE("Scheduler::SubmitExecution");
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
@@ -239,6 +246,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    gpu_profiler.OnSubmit(signal_value);
 
     work_semaphore.Refresh();
     BeginSession();

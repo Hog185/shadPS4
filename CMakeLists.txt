@@ -746,7 +746,11 @@ set(DEV_TOOLS src/core/devtools/layer.cpp
               src/core/devtools/layer.h
               src/core/devtools/layer_extra.cpp
               src/core/devtools/options.cpp
+              src/core/devtools/hle_profiler.cpp
+              src/core/devtools/hle_profiler.h
               src/core/devtools/options.h
+              src/core/devtools/thread_usage.cpp
+              src/core/devtools/thread_usage.h
               src/core/devtools/gcn/gcn_context_regs.cpp
               src/core/devtools/gcn/gcn_op_names.cpp
               src/core/devtools/gcn/gcn_shader_regs.cpp
@@ -757,6 +761,8 @@ set(DEV_TOOLS src/core/devtools/layer.cpp
               src/core/devtools/widget/frame_dump.h
               src/core/devtools/widget/frame_graph.cpp
               src/core/devtools/widget/frame_graph.h
+              src/core/devtools/widget/function_profiler.cpp
+              src/core/devtools/widget/function_profiler.h
               src/core/devtools/widget/gpu_memory.cpp
               src/core/devtools/widget/gpu_memory.h
               src/core/devtools/widget/imgui_memory_editor.h
@@ -1165,6 +1171,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_common.h
                src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
                src/video_core/renderer_vulkan/vk_compute_pipeline.h
+               src/video_core/renderer_vulkan/vk_gpu_profiler.cpp
+               src/video_core/renderer_vulkan/vk_gpu_profiler.h
                src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
                src/video_core/renderer_vulkan/vk_graphics_pipeline.h
                src/video_core/renderer_vulkan/vk_instance.cpp

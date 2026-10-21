@@ -4,8 +4,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <ctime>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <fmt/format.h>
 
 #include "core/libraries/fiber/fiber.h"
@@ -33,12 +35,33 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 
 #ifdef __FreeBSD__
 #define cpu_set_t cpuset_t
 #endif
 
 namespace Common {
+
+namespace {
+
+std::mutex recorded_names_mutex;
+std::unordered_map<u64, std::string> recorded_names;
+
+[[maybe_unused]] void RecordThreadName(u64 native_thread_id, const char* name) {
+    std::scoped_lock lock{recorded_names_mutex};
+    recorded_names[native_thread_id] = name;
+}
+
+} // namespace
+
+std::string GetRecordedThreadName(u64 native_thread_id) {
+    std::scoped_lock lock{recorded_names_mutex};
+    const auto it = recorded_names.find(native_thread_id);
+    return it != recorded_names.end() ? it->second : std::string{};
+}
 
 #ifdef __APPLE__
 
@@ -201,6 +224,7 @@ void SetCurrentThreadName(const char* name) {
 #elif defined(__NetBSD__)
     pthread_setname_np(pthread_self(), "%s", (void*)name);
 #elif defined(__linux__)
+    RecordThreadName(static_cast<u64>(::syscall(SYS_gettid)), name);
     // Linux limits thread names to 15 characters and will outright reject any
     // attempt to set a longer name with ERANGE.
     std::string truncated(name, std::min(strlen(name), static_cast<std::size_t>(15)));

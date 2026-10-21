@@ -6,6 +6,7 @@
 #pragma once
 
 #include <chrono>
+#include <string>
 #include "common/types.h"
 
 namespace Common {
@@ -25,6 +26,9 @@ void SetCurrentThreadPriority(ThreadPriority new_priority);
 void SetCurrentThreadName(const char* name);
 
 void SetThreadName(void* thread, const char* name);
+
+// Full name given to a native thread id by SetCurrentThreadName, for platforms that truncate it.
+std::string GetRecordedThreadName(u64 native_thread_id);
 
 bool AccurateSleep(std::chrono::nanoseconds duration, std::chrono::nanoseconds* remaining,
                    bool interruptible);
