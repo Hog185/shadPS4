@@ -132,11 +132,15 @@ void Scheduler::Wait(u64 tick) {
 }
 
 void Scheduler::PopPendingOperations() {
+    if (pending_ops_count.load(std::memory_order_acquire) == 0) {
+        return;
+    }
     std::unique_lock lk(pending_ops_mutex);
     work_semaphore.Refresh();
     while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         pending_ops.front().callback();
         pending_ops.pop();
+        pending_ops_count.fetch_sub(1, std::memory_order_release);
     }
 }
 
@@ -409,6 +413,12 @@ void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmd
     if (dirty_state.front_face) {
         dirty_state.front_face = false;
         cmdbuf.setFrontFace(front_face);
+    }
+    if (dirty_state.vertex_input) {
+        dirty_state.vertex_input = false;
+        if (instance.IsVertexInputDynamicState()) {
+            cmdbuf.setVertexInputEXT(vertex_bindings, vertex_attributes);
+        }
     }
     if (dirty_state.blend_constants) {
         dirty_state.blend_constants = false;
