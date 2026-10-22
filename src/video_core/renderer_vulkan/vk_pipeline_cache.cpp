@@ -658,9 +658,11 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
 PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_stage,
                                                 const Shader::ShaderParams& params,
                                                 Shader::Backend::Bindings& binding) {
-    auto runtime_info = BuildRuntimeInfo(hw_stage, sw_stage);
+    const auto& built_info = BuildRuntimeInfo(hw_stage, sw_stage);
     auto [it_pgm, new_program] = program_cache.try_emplace(params.hash);
     if (new_program) {
+        // Compilation may modify the runtime info, so it gets its own copy.
+        auto runtime_info = built_info;
         it_pgm.value() = std::make_unique<Program>(hw_stage, sw_stage, params);
         auto& program = it_pgm.value();
         auto start = binding;
@@ -681,15 +683,22 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     info.pgm_base = params.Base(); // Needs to be actualized for inline cbuffer address fixup
     info.user_data = params.user_data;
     info.RefreshFlatBuf();
-    auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
+    auto spec = Shader::StageSpecialization(info, built_info, profile, binding);
 
     size_t perm_idx = program->modules.size();
     u64 perm_hash = HashCombine(params.hash, perm_idx);
 
     vk::ShaderModule module{};
 
-    const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
-    if (it == program->modules.end()) {
+    auto& modules = program->modules;
+    auto it = modules.end();
+    if (program->last_perm < modules.size() && modules[program->last_perm].spec == spec) {
+        it = modules.begin() + program->last_perm;
+    } else {
+        it = std::ranges::find(modules, spec, &Program::Module::spec);
+    }
+    if (it == modules.end()) {
+        auto runtime_info = built_info;
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
 
@@ -698,9 +707,10 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
     } else {
         info.AddBindings(binding);
         module = it->module;
-        perm_idx = std::distance(program->modules.begin(), it);
+        perm_idx = std::distance(modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
     }
+    program->last_perm = perm_idx;
     if (auto& fetch = program->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
     }
