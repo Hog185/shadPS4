@@ -81,6 +81,12 @@ struct SubmitInfo {
 using Viewports = boost::container::static_vector<vk::Viewport, AmdGpu::NUM_VIEWPORTS>;
 using Scissors = boost::container::static_vector<vk::Rect2D, AmdGpu::NUM_VIEWPORTS>;
 using ColorWriteMasks = std::array<vk::ColorComponentFlags, AmdGpu::NUM_COLOR_BUFFERS>;
+static constexpr u32 MaxDynamicVertexInputs = 32;
+using VertexBindingDescs =
+    boost::container::static_vector<vk::VertexInputBindingDescription2EXT, MaxDynamicVertexInputs>;
+using VertexAttributeDescs =
+    boost::container::static_vector<vk::VertexInputAttributeDescription2EXT,
+                                    MaxDynamicVertexInputs>;
 struct StencilOps {
     vk::StencilOp fail_op{};
     vk::StencilOp pass_op{};
@@ -122,6 +128,8 @@ struct DynamicState {
         bool cull_mode : 1;
         bool front_face : 1;
 
+        bool vertex_input : 1;
+
         bool blend_constants : 1;
         bool color_write_masks : 1;
         bool line_width : 1;
@@ -159,6 +167,9 @@ struct DynamicState {
     vk::CullModeFlags cull_mode{};
     vk::FrontFace front_face{};
 
+    VertexBindingDescs vertex_bindings{};
+    VertexAttributeDescs vertex_attributes{};
+
     std::array<float, 4> blend_constants{};
     ColorWriteMasks color_write_masks{};
     float line_width{};
@@ -184,6 +195,27 @@ struct DynamicState {
             scissors = scissors_;
             dirty_state.scissors = true;
         }
+    }
+
+    void SetVertexInput(const VertexBindingDescs& bindings,
+                        const VertexAttributeDescs& attributes) {
+        // Compared field by field, the Vulkan structs carry uninitialized padding.
+        const bool same_bindings = std::ranges::equal(
+            vertex_bindings, bindings, [](const auto& a, const auto& b) {
+                return a.binding == b.binding && a.stride == b.stride &&
+                       a.inputRate == b.inputRate && a.divisor == b.divisor;
+            });
+        const bool same_attributes = std::ranges::equal(
+            vertex_attributes, attributes, [](const auto& a, const auto& b) {
+                return a.location == b.location && a.binding == b.binding &&
+                       a.format == b.format && a.offset == b.offset;
+            });
+        if (same_bindings && same_attributes) {
+            return;
+        }
+        vertex_bindings = bindings;
+        vertex_attributes = attributes;
+        dirty_state.vertex_input = true;
     }
 
     void SetDepthTestEnabled(const bool enabled) {
@@ -433,6 +465,7 @@ public:
     void DeferOperation(Common::UniqueFunction<void>&& func) {
         std::unique_lock lk(pending_ops_mutex);
         pending_ops.emplace(std::move(func), CurrentTick());
+        pending_ops_count.fetch_add(1, std::memory_order_release);
     }
 
     /// Defers an operation until the gpu has reached the current cpu tick.
@@ -472,6 +505,7 @@ private:
         u64 gpu_tick;
     };
     std::queue<PendingOp> pending_ops;
+    std::atomic<u32> pending_ops_count{0}; // Lets the per-draw poll skip the lock when idle
     std::recursive_mutex pending_ops_mutex;
     std::queue<PendingOp> priority_pending_ops;
     std::mutex priority_pending_ops_mutex;
