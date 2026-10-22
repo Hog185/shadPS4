@@ -991,8 +991,8 @@ void Translator::SetDst(const InstOperand& operand, const IR::U32F32& value) {
         return ir.SetM0(result);
     case OperandField::ExecLo:
     case OperandField::ExecHi: {
-        const IR::U32 bits = result.Type() == IR::Type::F32 ? ir.BitCast<IR::U32>(IR::F32{result})
-                                                            : IR::U32{result};
+        const IR::U32 bits =
+            result.Type() == IR::Type::F32 ? ir.BitCast<IR::U32>(IR::F32{result}) : IR::U32{result};
         const IR::Value cur = ir.UnpackUint2x32(ir.Ballot(ir.GetExec()));
         const bool is_lo = operand.field == OperandField::ExecLo;
         const IR::U32 lo = is_lo ? bits : IR::U32{ir.CompositeExtract(cur, 0U)};
