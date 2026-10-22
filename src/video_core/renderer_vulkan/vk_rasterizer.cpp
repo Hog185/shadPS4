@@ -22,6 +22,10 @@
 
 namespace Vulkan {
 
+static_assert(
+    std::is_same_v<VertexInputs<vk::VertexInputBindingDescription2EXT>, VertexBindingDescs> &&
+    std::is_same_v<VertexInputs<vk::VertexInputAttributeDescription2EXT>, VertexAttributeDescs>);
+
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
     // TODO(roamic): Add support for multiple viewports and geometry shaders when ViewportIndex
     // is encountered and implemented in the recompiler.
@@ -451,9 +455,8 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
                               regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
 
     if (instance.IsVertexInputDynamicState()) {
-        // Update current vertex inputs.
-        const auto cmdbuf = scheduler.CommandBuffer();
-        cmdbuf.setVertexInputEXT(bindings, attributes);
+        // Recorded on commit, and only when the layout changed.
+        scheduler.GetDynamicState().SetVertexInput(bindings, attributes);
     }
 
     if (bindings.empty()) {
