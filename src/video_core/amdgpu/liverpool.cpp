@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <boost/preprocessor/stringize.hpp>
 
 #include "common/assert.h"
@@ -52,7 +53,14 @@ static const char* acb_task_name[] = NAME_ARRAY(ACB_TASK, MAX_NAMES);
 
 std::array<u8, 48_KB> Liverpool::ConstantEngine::constants_heap;
 
+static constexpr u32 StallYieldThreshold = 2048;
+static constexpr u32 StallSleepThreshold = 16384;
+static constexpr auto StallSleepDuration = std::chrono::microseconds(100);
+
+static u64 retired_packets{};
+
 static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset) {
+    ++retired_packets;
     if (offset > span.size()) {
         LOG_ERROR(
             Lib_GnmDriver,
@@ -96,8 +104,7 @@ void Liverpool::ProcessCeQueue() {
         }
         task = ce_submits.front();
     }
-    task.resume();
-    if (task.done()) {
+    if (ResumeTask(task)) {
         task.destroy();
         std::scoped_lock lock{queue.m_access};
         ce_submits.pop();
@@ -105,6 +112,32 @@ void Liverpool::ProcessCeQueue() {
         std::scoped_lock lock2{submit_mutex};
         submit_cv.notify_all();
     }
+}
+
+bool Liverpool::ResumeTask(Task::Handle task) {
+    const u64 retired_before = retired_packets;
+    task.resume();
+    const bool done = task.done();
+    if (done || retired_packets != retired_before) {
+        stalled_resumes = 0;
+    } else {
+        BackoffStalledTasks();
+    }
+    return done;
+}
+
+void Liverpool::BackoffStalledTasks() {
+    ++stalled_resumes;
+    if (stalled_resumes < StallYieldThreshold) {
+        return;
+    }
+    if (stalled_resumes < StallSleepThreshold) {
+        std::this_thread::yield();
+        return;
+    }
+    std::unique_lock lk{submit_mutex};
+    submit_cv.wait_for(lk, StallSleepDuration,
+                       [this] { return num_commands || num_submits != submits_seen; });
 }
 
 void Liverpool::ProcessCommands() {
@@ -142,7 +175,13 @@ void Liverpool::Process(std::stop_token stoken) {
 
         curr_qid = -1;
 
+        stalled_resumes = 0;
+
         while ((num_submits || num_commands) && !stoken.stop_requested()) {
+            submits_seen = num_submits;
+            if (num_commands) {
+                stalled_resumes = 0;
+            }
             ProcessCommands();
             ProcessCeQueue();
 
@@ -158,9 +197,8 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
-            task.resume();
 
-            if (task.done()) {
+            if (ResumeTask(task)) {
                 task.destroy();
 
                 std::scoped_lock lock{queue.m_access};
