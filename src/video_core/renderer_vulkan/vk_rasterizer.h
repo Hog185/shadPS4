@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <boost/container/flat_set.hpp>
+
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -172,6 +174,8 @@ private:
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;
     Shader::PushData push_data;
+
+    boost::container::flat_set<u64> clamped_stages;
 
     bool attachment_feedback_loop{};
     bool needs_barrier{};
