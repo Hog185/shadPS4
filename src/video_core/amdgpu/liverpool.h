@@ -194,6 +194,8 @@ private:
     void ProcessCommands();
     void ProcessCeQueue();
     void Process(std::stop_token stoken);
+    bool ResumeTask(Task::Handle task);
+    void BackoffStalledTasks();
 
     struct GpuQueue {
         std::mutex m_access{};
@@ -238,6 +240,8 @@ private:
     u32 gpu_tid;
 #endif
     s32 curr_qid{-1};
+    u32 stalled_resumes{};
+    u32 submits_seen{};
 };
 
 } // namespace AmdGpu
