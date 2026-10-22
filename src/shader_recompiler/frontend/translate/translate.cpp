@@ -1001,6 +1001,8 @@ void Translator::SetDst(const InstOperand& operand, const IR::U32F32& value) {
     }
     default:
         UNREACHABLE_MSG("Unknown field {}", u32(operand.field));
+    }
+}
 
 template <bool is_signed>
 void Translator::SetDst16(const InstOperand& operand, const IR::U32F32& value) {
