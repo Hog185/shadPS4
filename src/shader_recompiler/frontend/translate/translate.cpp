@@ -989,10 +989,18 @@ void Translator::SetDst(const InstOperand& operand, const IR::U32F32& value) {
         return ir.SetVccHi(result);
     case OperandField::M0:
         return ir.SetM0(result);
+    case OperandField::ExecLo:
+    case OperandField::ExecHi: {
+        const IR::U32 bits = result.Type() == IR::Type::F32 ? ir.BitCast<IR::U32>(IR::F32{result})
+                                                            : IR::U32{result};
+        const IR::Value cur = ir.UnpackUint2x32(ir.Ballot(ir.GetExec()));
+        const bool is_lo = operand.field == OperandField::ExecLo;
+        const IR::U32 lo = is_lo ? bits : IR::U32{ir.CompositeExtract(cur, 0U)};
+        const IR::U32 hi = is_lo ? IR::U32{ir.CompositeExtract(cur, 1U)} : bits;
+        return ir.SetExec(ir.InverseBallot(ir.PackUint2x32(ir.CompositeConstruct(lo, hi))));
+    }
     default:
         UNREACHABLE_MSG("Unknown field {}", u32(operand.field));
-    }
-}
 
 template <bool is_signed>
 void Translator::SetDst16(const InstOperand& operand, const IR::U32F32& value) {
