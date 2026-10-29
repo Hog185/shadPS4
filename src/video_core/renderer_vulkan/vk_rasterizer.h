@@ -78,6 +78,9 @@ public:
     void MapMemory(VAddr addr, u64 size);
     void RegisterMemory(VAddr addr, u64 size);
     void UnmapMemory(VAddr addr, u64 size);
+    void SetTrackingExcluded(VAddr addr, u64 size, bool exclude) {
+        page_manager.SetExcluded(addr, size, exclude);
+    }
 
     u64 Flush();
     void Finish();
