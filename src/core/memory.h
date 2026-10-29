@@ -306,6 +306,8 @@ public:
 
     void InvalidateMemory(VAddr addr, u64 size) const;
 
+    void SetGpuTrackingExcluded(VAddr addr, u64 size, bool exclude) const;
+
 private:
     VMAHandle FindVMA(VAddr target) {
         return std::prev(vma_map.upper_bound(target));
