@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include "common/debug.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -103,6 +104,24 @@ bool Rasterizer::FilterDraw() {
     return true;
 }
 
+template <typename T>
+static bool RegsEqual(const T& lhs, const T& rhs) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    return std::memcmp(&lhs, &rhs, sizeof(T)) == 0;
+}
+
+template <typename T>
+static void StoreRegs(T& dst, const T& src) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    std::memcpy(&dst, &src, sizeof(T));
+}
+
+// Only an exact match is stable across draws, overlap resolution depends on cache state.
+static bool IsExactMatch(const VideoCore::Image& image, const VideoCore::ImageInfo& info) {
+    return image.info.guest_address == info.guest_address &&
+           image.info.guest_size == info.guest_size && image.info.size == info.size;
+}
+
 void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     // Prefetch render targets to handle overlaps with bound textures (e.g. mipgen)
     const auto& key = pipeline->GetGraphicsKey();
@@ -115,31 +134,68 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         regs.color_control.mode == AmdGpu::ColorControl::OperationMode::Disable;
     for (s32 cb = 0; cb < std::bit_width(key.mrt_mask); ++cb) {
         auto& [image_id, desc] = cb_descs[cb];
+        auto& cb_key = cb_keys[cb];
         const auto& col_buf = regs.color_buffers[cb];
         const u32 target_mask = regs.color_target_mask.GetMask(cb);
         if (skip_cb_binding || !col_buf || !target_mask || (key.mrt_mask & (1 << cb)) == 0) {
             image_id = {};
+            cb_key.valid = false;
             continue;
         }
         const auto& hint = liverpool->last_cb_extent[cb];
-        std::construct_at(&desc, col_buf, hint);
-        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
-        auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        const bool reuse = cb_key.valid && image_id &&
+                           cb_key.generation == texture_cache.ImageSetGeneration() &&
+                           RegsEqual(cb_key.hint, hint) && RegsEqual(cb_key.buffer, col_buf);
+        if (reuse) {
+            // The lookup would resolve to the same image, only keep it alive.
+            bound_images.emplace_back(image_id);
+            texture_cache.GetImage(image_id).tick_accessed_last = scheduler.CurrentTick();
+        } else {
+            std::construct_at(&desc, col_buf, hint);
+            image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
+            cb_key.valid = IsExactMatch(texture_cache.GetImage(image_id), desc.info);
+            if (cb_key.valid) {
+                StoreRegs(cb_key.buffer, col_buf);
+                StoreRegs(cb_key.hint, hint);
+                cb_key.generation = texture_cache.ImageSetGeneration();
+            }
+        }
+        texture_cache.GetImage(image_id).binding.is_target = 1u;
     }
 
     if ((regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
         (regs.depth_control.stencil_enable && regs.depth_buffer.StencilValid())) {
         const auto htile_address = regs.depth_htile_data_base.GetAddress();
         const auto& hint = liverpool->last_db_extent;
+        const bool write_enable = regs.depth_control.depth_write_enable;
         auto& [image_id, desc] = db_desc;
-        std::construct_at(&desc, regs.depth_buffer, regs.depth_view, regs.depth_control,
-                          htile_address, hint);
-        image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
-        auto& image = texture_cache.GetImage(image_id);
-        image.binding.is_target = 1u;
+        // Depth control only feeds the view through the depth write bit.
+        const bool reuse =
+            db_key.valid && image_id && db_key.generation == texture_cache.ImageSetGeneration() &&
+            db_key.write_enable == write_enable && db_key.htile_address == htile_address &&
+            RegsEqual(db_key.hint, hint) && RegsEqual(db_key.view, regs.depth_view) &&
+            RegsEqual(db_key.buffer, regs.depth_buffer);
+        if (reuse) {
+            bound_images.emplace_back(image_id);
+            texture_cache.GetImage(image_id).tick_accessed_last = scheduler.CurrentTick();
+        } else {
+            std::construct_at(&desc, regs.depth_buffer, regs.depth_view, regs.depth_control,
+                              htile_address, hint);
+            image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
+            db_key.valid = IsExactMatch(texture_cache.GetImage(image_id), desc.info);
+            if (db_key.valid) {
+                StoreRegs(db_key.buffer, regs.depth_buffer);
+                StoreRegs(db_key.view, regs.depth_view);
+                StoreRegs(db_key.hint, hint);
+                db_key.htile_address = htile_address;
+                db_key.write_enable = write_enable;
+                db_key.generation = texture_cache.ImageSetGeneration();
+            }
+        }
+        texture_cache.GetImage(image_id).binding.is_target = 1u;
     } else {
         db_desc.image_id = {};
+        db_key.valid = false;
     }
 }
 
@@ -1040,6 +1096,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         has_attachment = true;
         auto* image = &texture_cache.GetImage(image_id);
         if (image->binding.needs_rebind) {
+            cb_keys[cb].valid = false;
             image_id = bound_images.emplace_back(texture_cache.FindImage(desc));
             image = &texture_cache.GetImage(image_id);
         }
