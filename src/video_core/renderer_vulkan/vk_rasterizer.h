@@ -157,6 +157,25 @@ private:
     std::array<ImageBinding, AmdGpu::NUM_COLOR_BUFFERS> cb_descs;
     ImageBinding db_desc;
 
+    // Inputs a cached render target lookup was resolved with.
+    struct ColorTargetKey {
+        AmdGpu::ColorBuffer buffer;
+        AmdGpu::CbDbExtent hint;
+        u64 generation;
+        bool valid{};
+    };
+    struct DepthTargetKey {
+        AmdGpu::DepthBuffer buffer;
+        AmdGpu::DepthView view;
+        AmdGpu::CbDbExtent hint;
+        VAddr htile_address;
+        u64 generation;
+        bool write_enable;
+        bool valid{};
+    };
+    std::array<ColorTargetKey, AmdGpu::NUM_COLOR_BUFFERS> cb_keys;
+    DepthTargetKey db_key;
+
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
     boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
 
