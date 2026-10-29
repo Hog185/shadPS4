@@ -41,6 +41,12 @@ public:
     /// Updates watches in the pages touching the specified region.
     void UpdatePageWatchers(VAddr addr, u64 size, PageOp write_op) const;
 
+    /// Keeps the pages fully inside the range from ever being write/read protected.
+    void SetExcluded(VAddr addr, u64 size, bool exclude) const;
+
+    /// Drops every exclusion on pages touching the range (used when memory is unmapped).
+    void ClearExcluded(VAddr addr, u64 size) const;
+
     /// Updates watches in the pages touching the inclusive bounds using a mask.
     void UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,
                                      const RegionBits& write_mask, const RegionBits& read_mask,
