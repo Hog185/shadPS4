@@ -12,6 +12,7 @@
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/threads/thread_state.h"
 #include "core/libraries/libs.h"
+#include "core/memory.h"
 #include "core/tls.h"
 
 namespace Libraries::Fiber {
@@ -28,7 +29,6 @@ OrbisFiberContext* GetFiberContext() {
     return Core::GetTcbBase()->tcb_fiber;
 }
 
-#ifdef _WIN32
 struct FiberStack {
     u64 size;
     void* stack;
@@ -39,6 +39,7 @@ struct FiberStack {
 static std::mutex fiber_stacks_mutex;
 static std::map<VAddr, FiberStack> fiber_stacks;
 
+#ifdef _WIN32
 static void* AllocateStack(u64 size) {
     Kernel::PthreadAttr attr{.stacksize_attr = size};
     const int ret = Kernel::ThrState::Instance()->CreateStack(&attr);
@@ -54,10 +55,28 @@ static void FreeStack(void* stack, u64 size) {
 }
 #endif
 
-static void* AcquireStack(void* addr_context, u64 size_context) {
+static void* CreateFiberStack(VAddr start, u64 size) {
 #ifdef _WIN32
     // Windows delivers a fault on the stack of the faulting thread, so a fiber cannot run on
     // game memory that the GPU caches may write protect. It gets a stack of its own instead.
+    return AllocateStack(size);
+#else
+    // The stack stays in game memory, so keep GPU tracking from protecting it. A protected
+    // stack faults on every context save and stalls the thread on the fault handler.
+    Core::Memory::Instance()->SetGpuTrackingExcluded(start, size, true);
+    return reinterpret_cast<void*>(start);
+#endif
+}
+
+static void DestroyFiberStack(VAddr start, const FiberStack& stack) {
+#ifdef _WIN32
+    FreeStack(stack.stack, stack.size);
+#else
+    Core::Memory::Instance()->SetGpuTrackingExcluded(start, stack.size, false);
+#endif
+}
+
+static void* AcquireStack(void* addr_context, u64 size_context) {
     const VAddr start = reinterpret_cast<VAddr>(addr_context);
     std::scoped_lock lk{fiber_stacks_mutex};
     auto it = fiber_stacks.lower_bound(start);
@@ -71,28 +90,23 @@ static void* AcquireStack(void* addr_context, u64 size_context) {
         }
         // A PS4 would overwrite the older context, so no fiber can run on it anymore. This also
         // frees the stacks of fibers that are never finalized.
-        FreeStack(it->second.stack, it->second.size);
+        DestroyFiberStack(it->first, it->second);
         it = fiber_stacks.erase(it);
     }
-    void* stack = AllocateStack(size_context);
+    void* stack = CreateFiberStack(start, size_context);
     fiber_stacks.emplace(start, FiberStack{size_context, stack, 1});
     return stack;
-#else
-    return addr_context;
-#endif
 }
 
 static void ReleaseStack(const OrbisFiber* fiber) {
-#ifdef _WIN32
     std::scoped_lock lk{fiber_stacks_mutex};
     const auto it = fiber_stacks.find(reinterpret_cast<VAddr>(fiber->addr_context));
     if (it == fiber_stacks.end() || it->second.stack != fiber->context_start ||
         --it->second.num_fibers != 0) {
         return;
     }
-    FreeStack(it->second.stack, it->second.size);
+    DestroyFiberStack(it->first, it->second);
     fiber_stacks.erase(it);
-#endif
 }
 
 extern "C" s32 PS4_SYSV_ABI _sceFiberSetJmp(OrbisFiberContext* ctx) asm("_sceFiberSetJmp");
