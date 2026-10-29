@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 #include "common/adaptive_mutex.h"
 #include "common/assert.h"
@@ -41,15 +42,17 @@ struct PageManager::Impl {
     struct PageState {
         u8 num_write_watchers;
         u8 num_read_watchers;
+        // Pages that must never be protected (e.g. fiber stacks); watcher counts stay balanced.
+        u8 num_excluded;
 
         Core::MemoryPermission WritePerm() const noexcept {
-            return num_write_watchers == 0 ? Core::MemoryPermission::Write
-                                           : Core::MemoryPermission::None;
+            return num_write_watchers == 0 || num_excluded != 0 ? Core::MemoryPermission::Write
+                                                                : Core::MemoryPermission::None;
         }
 
         Core::MemoryPermission ReadPerm() const noexcept {
-            return num_read_watchers == 0 ? Core::MemoryPermission::Read
-                                          : Core::MemoryPermission::None;
+            return num_read_watchers == 0 || num_excluded != 0 ? Core::MemoryPermission::Read
+                                                               : Core::MemoryPermission::None;
         }
 
         Core::MemoryPermission Perms() const noexcept {
@@ -187,6 +190,75 @@ struct PageManager::Impl {
         }
     }
 
+    /// Adds (or removes) an exclusion on the pages fully inside [addr, addr + size), or on every
+    /// page touching the range when clearing all exclusions.
+    void SetExcluded(VAddr addr, u64 size, bool exclude, bool clear_all) {
+        u64 page_start = addr >> PM_PAGE_BITS;
+        u64 page_end = Common::DivCeil(addr + size, PM_PAGE_SIZE);
+        if (!clear_all) {
+            // Only whole pages, so data sharing an edge page stays tracked.
+            page_start = Common::DivCeil(addr, PM_PAGE_SIZE);
+            page_end = (addr + size) >> PM_PAGE_BITS;
+        }
+        if (page_start >= page_end || (clear_all && num_excluded_pages == 0)) {
+            return;
+        }
+        if (exclude) {
+            EnsurePages(page_start << PM_PAGE_BITS, page_end << PM_PAGE_BITS);
+        }
+
+        Core::MemoryPermission run_perms{};
+        u64 run_begin = 0;
+        u64 run_pages = 0;
+        const auto flush = [&] {
+            if (run_pages > 0) {
+                Protect(run_begin << PM_PAGE_BITS, run_pages << PM_PAGE_BITS, run_perms);
+                run_pages = 0;
+            }
+        };
+
+        for (u64 page = page_start; page != page_end; ++page) {
+            PageState* state = cached_pages.find(page);
+            if (!state) {
+                flush();
+                continue;
+            }
+            locks[page].lock();
+
+            const auto old_perms = state->Perms();
+            if (exclude) {
+                ASSERT_MSG(state->num_excluded < 255, "Too many exclusions");
+                ++state->num_excluded;
+                ++num_excluded_pages;
+            } else if (clear_all) {
+                num_excluded_pages -= state->num_excluded;
+                state->num_excluded = 0;
+            } else if (state->num_excluded > 0) {
+                --state->num_excluded;
+                --num_excluded_pages;
+            }
+            const auto new_perms = state->Perms();
+
+            if (new_perms == old_perms) {
+                flush();
+            } else if (run_pages > 0 && new_perms == run_perms && run_begin + run_pages == page) {
+                ++run_pages;
+            } else {
+                flush();
+                run_begin = page;
+                run_pages = 1;
+                run_perms = new_perms;
+            }
+        }
+        flush();
+
+        for (u64 page = page_start; page != page_end; ++page) {
+            if (auto* lock = locks.find(page); lock && cached_pages.find(page)) {
+                lock->unlock();
+            }
+        }
+    }
+
     void UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,
                                      const RegionBits& write_mask, const RegionBits& read_mask,
                                      PageOp write_op, PageOp read_op) {
@@ -264,6 +336,8 @@ struct PageManager::Impl {
         static constexpr bool NULL_CHECK = false;
     };
     Common::MultiLevelPageTable<PageTraits> cached_pages;
+    // Total exclusions across all pages, lets unmap skip the scan when nothing is excluded.
+    std::atomic<u64> num_excluded_pages{0};
     struct MutexTraits {
 #ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
         using Entry = Common::AdaptiveMutex;
@@ -473,6 +547,14 @@ void PageManager::OnGpuUnmap(VAddr address, size_t size) {
 
 void PageManager::UpdatePageWatchers(VAddr addr, u64 size, PageOp write_op) const {
     impl->UpdatePageWatchers(addr, size, write_op);
+}
+
+void PageManager::SetExcluded(VAddr addr, u64 size, bool exclude) const {
+    impl->SetExcluded(addr, size, exclude, false);
+}
+
+void PageManager::ClearExcluded(VAddr addr, u64 size) const {
+    impl->SetExcluded(addr, size, false, true);
 }
 
 void PageManager::UpdatePageWatchersForRegion(VAddr base_addr, const Bounds& bounds,
