@@ -1473,6 +1473,13 @@ void MemoryManager::InvalidateMemory(const VAddr addr, const u64 size) const {
     }
 }
 
+void MemoryManager::SetGpuTrackingExcluded(const VAddr addr, const u64 size,
+                                           const bool exclude) const {
+    if (rasterizer) {
+        rasterizer->SetTrackingExcluded(addr, size, exclude);
+    }
+}
+
 VAddr MemoryManager::SearchFree(VAddr virtual_addr, u64 size, u32 alignment) {
     // Calculate the minimum and maximum addresses present in our address space.
     auto min_search_address = impl.SystemManagedVirtualBase();
