@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -131,6 +132,12 @@ public:
 
     /// Schedules a copy of pending images for download back to CPU memory.
     void ProcessDownloadImages();
+
+    /// Counter bumped whenever an image is registered or unregistered. Lookups by identical
+    /// descriptors return the same image as long as it is unchanged.
+    [[nodiscard]] u64 ImageSetGeneration() const noexcept {
+        return image_set_generation.load(std::memory_order_relaxed);
+    }
 
     /// Retrieves the image handle of the image with the provided attributes.
     [[nodiscard]] ImageId FindImage(ImageDesc& desc, bool exact_fmt = false);
@@ -421,6 +428,7 @@ private:
     u64 pressure_gc_samplers = 0;
     u64 critical_gc_samplers = 0;
     u64 gc_tick = 0;
+    std::atomic<u64> image_set_generation{};
     Common::LRUCache<Image> image_lru_cache;
     Common::LRUCache<Sampler> sampler_lru_cache;
     const bool readback_linear_images;
