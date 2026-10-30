@@ -12,6 +12,7 @@
 #include "common/unique_function.h"
 #include "video_core/amdgpu/regs_color.h"
 #include "video_core/amdgpu/regs_primitive.h"
+#include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "vulkan/vulkan.hpp"
@@ -409,6 +410,11 @@ public:
         return sessions.back().primary;
     }
 
+    /// Returns the GPU timing profiler of this scheduler.
+    [[nodiscard]] GpuProfiler& GpuProfile() noexcept {
+        return gpu_profiler;
+    }
+
     /// Returns the current command buffer tick.
     [[nodiscard]] u64 CurrentTick() const noexcept {
         return work_semaphore.CurrentTick();
@@ -458,6 +464,7 @@ private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    GpuProfiler gpu_profiler;
     DynamicState dynamic_state;
     SessionFunc on_session{};
     SubmitFunc on_submit{};

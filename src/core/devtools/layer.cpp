@@ -6,7 +6,11 @@
 #include <SDL3/SDL_events.h>
 #include <imgui.h>
 
+#include <fmt/format.h>
+
 #include "SDL3/SDL_log.h"
+#include "common/elf_info.h"
+#include "common/scm_rev.h"
 #include "common/singleton.h"
 #include "common/types.h"
 #include "core/debug_state.h"
@@ -18,6 +22,7 @@
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "widget/frame_dump.h"
 #include "widget/frame_graph.h"
+#include "widget/function_profiler.h"
 #include "widget/gpu_memory.h"
 #include "widget/memory_map.h"
 #include "widget/module_list.h"
@@ -51,6 +56,14 @@ static Widget::MemoryMapViewer memory_map;
 static Widget::ShaderList shader_list;
 static Widget::ModuleList module_list;
 static Widget::GpuMemoryViewer gpu_memory;
+static Widget::FunctionProfiler function_profiler;
+
+static std::string BuildProfilerSystemInfo() {
+    const auto& elf_info = Common::ElfInfo::Instance();
+    return fmt::format("shadPS4 {} ({})\nGame: {} [{}] version {}\n", Common::g_version,
+                       Common::g_scm_desc, elf_info.Title(), elf_info.GameSerial(),
+                       elf_info.AppVer());
+}
 
 // clang-format off
 static std::string help_text =
@@ -129,6 +142,17 @@ void L::DrawMenuBar() {
         if (BeginMenu("Debug")) {
             MenuItem("Memory map", nullptr, &memory_map.open);
             MenuItem("Module list", nullptr, &module_list.open);
+            MenuItem("Performance profiler", "Alt+F10", &function_profiler.open);
+            if (BeginMenu("Performance profiler list size")) {
+                for (const int n : {25, 50, 75}) {
+                    char label[16];
+                    snprintf(label, sizeof(label), "Top %d", n);
+                    if (MenuItem(label, nullptr, function_profiler.top_n == n)) {
+                        function_profiler.top_n = n;
+                    }
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
 
@@ -322,6 +346,34 @@ static void LoadSettings(const char* line) {
         gpu_memory.open = i != 0;
         return;
     }
+    if (sscanf(line, "show_function_profiler=%d", &i) == 1) {
+        function_profiler.open = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_cpu_time=%d", &i) == 1) {
+        function_profiler.measure_cpu = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_exclude_waits=%d", &i) == 1) {
+        function_profiler.exclude_waits = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_detect_stutter=%d", &i) == 1) {
+        function_profiler.detect_stutter = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_pause_on_stutter=%d", &i) == 1) {
+        function_profiler.pause_on_stutter = i != 0;
+        return;
+    }
+    if (sscanf(line, "function_profiler_stutter_ms=%d", &i) == 1) {
+        function_profiler.stutter_threshold_ms = i >= 10 && i <= 1000 ? i : 50;
+        return;
+    }
+    if (sscanf(line, "function_profiler_top=%d", &i) == 1) {
+        function_profiler.top_n = (i == 50 || i == 75) ? i : 25;
+        return;
+    }
     if (sscanf(line, "dump_frame_count=%d", &i) == 1) {
         dump_frame_count = i;
         return;
@@ -329,6 +381,7 @@ static void LoadSettings(const char* line) {
 }
 
 void L::SetupSettings() {
+    function_profiler.get_system_info = &BuildProfilerSystemInfo;
     frame_graph.is_open = true;
     show_simple_fps = EmulatorSettings.IsShowFpsCounter();
     visibility_toggled = show_simple_fps;
@@ -368,6 +421,14 @@ void L::SetupSettings() {
         buf->appendf("show_memory_map=%d\n", memory_map.open);
         buf->appendf("show_module_list=%d\n", module_list.open);
         buf->appendf("show_gpu_memory=%d\n", gpu_memory.open);
+        buf->appendf("show_function_profiler=%d\n", function_profiler.open);
+        buf->appendf("function_profiler_top=%d\n", function_profiler.top_n);
+        buf->appendf("function_profiler_cpu_time=%d\n", function_profiler.measure_cpu);
+        buf->appendf("function_profiler_exclude_waits=%d\n", function_profiler.exclude_waits);
+        buf->appendf("function_profiler_detect_stutter=%d\n", function_profiler.detect_stutter);
+        buf->appendf("function_profiler_pause_on_stutter=%d\n", function_profiler.pause_on_stutter);
+        buf->appendf("function_profiler_stutter_ms=%d\n",
+                     static_cast<int>(function_profiler.stutter_threshold_ms));
         buf->appendf("dump_frame_count=%d\n", dump_frame_count);
         buf->append("\n");
         buf->appendf("[%s][CmdList]\n", handler->TypeName);
@@ -402,6 +463,8 @@ void L::Draw() {
     if (IsKeyPressed(ImGuiKey_F10, false)) {
         if (io.KeyCtrl) {
             DebugState.IsShowingDebugMenuBar() ^= true;
+        } else if (io.KeyAlt) {
+            function_profiler.open ^= true;
         }
         visibility_toggled = true;
     }
@@ -452,6 +515,13 @@ void L::Draw() {
             DrawSimple();
         }
         End();
+    }
+
+    // Drawn independently of the advanced debug menu.
+    if (function_profiler.open || HleProfiler::IsEnabled()) {
+        PushFont(io.Fonts->Fonts[IMGUI_FONT_MONO]);
+        function_profiler.Draw();
+        PopFont();
     }
 
     if (DebugState.IsShowingDebugMenuBar()) {
