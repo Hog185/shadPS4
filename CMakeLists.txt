@@ -785,6 +785,14 @@ set(DEV_TOOLS src/core/devtools/layer.cpp
               src/core/devtools/widget/shader_list.h
               src/core/devtools/widget/text_editor.cpp
               src/core/devtools/widget/text_editor.h
+              src/core/devtools/hle_profiler.cpp
+              src/core/devtools/hle_profiler.h
+              src/core/devtools/perf_report.cpp
+              src/core/devtools/perf_report.h
+              src/core/devtools/thread_usage.cpp
+              src/core/devtools/thread_usage.h
+              src/core/devtools/widget/function_profiler.cpp
+              src/core/devtools/widget/function_profiler.h
 )
 
 set(COMMON src/common/logging/classes.cpp
@@ -1179,6 +1187,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/liverpool_to_vk.h
                src/video_core/renderer_vulkan/vk_common.cpp
                src/video_core/renderer_vulkan/vk_common.h
+               src/video_core/renderer_vulkan/vk_gpu_profiler.cpp
+               src/video_core/renderer_vulkan/vk_gpu_profiler.h
                src/video_core/renderer_vulkan/vk_compute_pipeline.cpp
                src/video_core/renderer_vulkan/vk_compute_pipeline.h
                src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
