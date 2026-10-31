@@ -461,20 +461,31 @@ u64 IOFile::GetSize() const {
         return 0;
     }
 
-    // Flush any unwritten buffered data into the file prior to retrieving the file size.
-    std::fflush(file);
+    // Only a stream that can hold unwritten data needs flushing; flushing a read stream drops its
+    // buffer and forces a seek.
+    if (file_access_mode != FileAccessMode::Read) {
+        std::fflush(file);
+    }
 
-    std::error_code ec;
-
-    const auto file_size = fs::file_size(file_path, ec);
-
-    if (ec) {
+    // Query the open handle, a path lookup is a metadata round trip on every call.
+#ifdef _WIN32
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(reinterpret_cast<HANDLE>(_get_osfhandle(fileno(file))), &size)) {
+        LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, error={}",
+                  PathToUTF8String(file_path), GetLastError());
+        return 0;
+    }
+    return static_cast<u64>(size.QuadPart);
+#else
+    struct stat st{};
+    if (::fstat(fileno(file), &st) != 0) {
+        const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, ec_message={}",
                   PathToUTF8String(file_path), ec.message());
         return 0;
     }
-
-    return file_size;
+    return static_cast<u64>(st.st_size);
+#endif
 }
 
 bool IOFile::Seek(s64 offset, SeekOrigin origin) const {

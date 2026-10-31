@@ -228,13 +228,17 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
     std::filesystem::path host_path = mount->host_path;
 
     // Update folder is either mount + "-UPDATE" or mount + "-patch"
+    std::error_code root_ec;
     std::filesystem::path patch_path = OverlayPath(mount->host_path, "-UPDATE");
-    if (!std::filesystem::exists(patch_path)) {
+    bool has_patch = std::filesystem::exists(patch_path, root_ec);
+    if (!has_patch) {
         patch_path = OverlayPath(mount->host_path, "-patch");
+        has_patch = std::filesystem::exists(patch_path, root_ec);
     }
 
     // Mods folder can only be at mount + "-mods"
     std::filesystem::path mods_path = OverlayPath(mount->host_path, "-mods");
+    const bool has_mods = std::filesystem::exists(mods_path, root_ec);
 
     // If we're just retrieving the mount, return the correct mount path.
     if (corrected_path_sanitized == mount->mount) {
@@ -262,12 +266,13 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
     }
 
     if ((corrected_path.starts_with("/app0") || corrected_path.starts_with("/hostapp")) &&
-        path_type != HostPathType::Base && std::filesystem::exists(mods_path)) {
+        path_type != HostPathType::Base && has_mods &&
+        std::filesystem::exists(mods_path)) {
         return mods_path;
     }
 
     if ((corrected_path.starts_with("/app0") || corrected_path.starts_with("/hostapp")) &&
-        path_type != HostPathType::Base && !ignore_game_patches &&
+        path_type != HostPathType::Base && !ignore_game_patches && has_patch &&
         std::filesystem::exists(patch_path)) {
         return patch_path;
     }
@@ -340,13 +345,14 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
     };
 
     if ((corrected_path.starts_with("/app0") || corrected_path.starts_with("/hostapp")) &&
-        path_type != HostPathType::Base) {
+        path_type != HostPathType::Base && has_mods) {
+        // A missing overlay root would make search() list its parent directory on every call.
         if (const auto path = search(mods_path)) {
             return *path;
         }
     }
 
-    if (path_type != HostPathType::Base && !ignore_game_patches) {
+    if (path_type != HostPathType::Base && !ignore_game_patches && has_patch) {
         if (const auto path = search(patch_path)) {
             return *path;
         }

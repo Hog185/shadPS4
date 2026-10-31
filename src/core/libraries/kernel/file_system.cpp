@@ -457,25 +457,26 @@ s64 PS4_SYSV_ABI sceKernelWrite(s32 fd, const void* buf, u64 nbytes) {
     return result;
 }
 
-static thread_local std::vector<u8> file_buf{};
+// Grow-only bounce buffer, default-initialized so growing it doesn't zero memory.
+static thread_local std::unique_ptr<u8[]> file_buf;
+static thread_local u64 file_buf_size = 0;
 
 s64 ReadFile(Core::FileSys::File* file, void* buf, u64 nbytes) {
     if (nbytes == 0) {
         return 0;
     }
 
-    const auto* memory = Core::Memory::Instance();
-    // Invalidate up to the actual number of bytes that could be read.
-    const auto remaining = file->GetSize() - file->Tell();
-    memory->InvalidateMemory(reinterpret_cast<VAddr>(buf), std::min<u64>(nbytes, remaining));
-    if (file_buf.capacity() < nbytes) {
-        file_buf.reserve(nbytes);
+    if (file_buf_size < nbytes) {
+        file_buf.reset(new u8[nbytes]);
+        file_buf_size = nbytes;
     }
-    s64 bytes = file->Read(file_buf.data(), nbytes);
-    if (bytes < 0) {
+    const s64 bytes = file->Read(file_buf.get(), nbytes);
+    if (bytes <= 0) {
         return bytes;
     }
-    std::memcpy(buf, file_buf.data(), bytes);
+    // Invalidate exactly what was read, so no size/position query is needed beforehand.
+    Core::Memory::Instance()->InvalidateMemory(reinterpret_cast<VAddr>(buf), bytes);
+    std::memcpy(buf, file_buf.get(), bytes);
     return bytes;
 }
 
@@ -919,7 +920,6 @@ s32 PS4_SYSV_ABI posix_stat(const char* path, OrbisKernelStat* sb) {
         return -1;
     }
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
-    const auto path_name = mnt->GetHostPath(path);
     std::memset(sb, 0, sizeof(OrbisKernelStat));
 
     const bool is_dir = mnt->IsDirectory(path);
@@ -939,14 +939,17 @@ s32 PS4_SYSV_ABI posix_stat(const char* path, OrbisKernelStat* sb) {
         return ORBIS_OK;
     }
 
-    // get the difference between file clock and system clock
-    const auto now_sys = std::chrono::system_clock::now();
-    const auto now_file = fs::file_time_type::clock::now();
-    // calculate the file modified time
-    std::error_code ec;
-    const auto mtime =
-        fs::exists(path_name, ec) ? fs::last_write_time(path_name, ec) : fs::file_time_type{};
-    const auto mtimestamp = now_sys + (mtime - now_file);
+    // Host path resolution is only needed when the backend can't supply a timestamp.
+    const auto host_mtime = [&] {
+        const auto path_name = mnt->GetHostPath(path);
+        // get the difference between file clock and system clock
+        const auto now_sys = std::chrono::system_clock::now();
+        const auto now_file = fs::file_time_type::clock::now();
+        std::error_code ec;
+        const auto mtime = fs::exists(path_name, ec) ? fs::last_write_time(path_name, ec)
+                                                      : fs::file_time_type{};
+        return now_sys + (mtime - now_file);
+    };
 
     if (is_dir) {
         sb->st_mode = 0000777u | 0040000u;
@@ -955,7 +958,8 @@ s32 PS4_SYSV_ABI posix_stat(const char* path, OrbisKernelStat* sb) {
         sb->st_blksize = 65536;
         sb->st_blocks = 128;
         sb->st_mtim.tv_sec =
-            std::chrono::duration_cast<std::chrono::seconds>(mtimestamp.time_since_epoch()).count();
+            std::chrono::duration_cast<std::chrono::seconds>(host_mtime().time_since_epoch())
+                .count();
         // TODO incomplete
     } else {
         sb->st_mode = 0000777u | 0100000u;
@@ -981,7 +985,7 @@ s32 PS4_SYSV_ABI posix_stat(const char* path, OrbisKernelStat* sb) {
             sb->st_ctim.tv_nsec = fst.ctime_nsec;
         } else {
             sb->st_mtim.tv_sec =
-                std::chrono::duration_cast<std::chrono::seconds>(mtimestamp.time_since_epoch())
+                std::chrono::duration_cast<std::chrono::seconds>(host_mtime().time_since_epoch())
                     .count();
         }
         sb->st_blksize = 512;
