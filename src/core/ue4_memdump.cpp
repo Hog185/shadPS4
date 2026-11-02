@@ -180,6 +180,21 @@ private:
     uint64_t regions_ = 0;
 };
 
+bool IsZeroPage(const uint8_t* p, size_t n) {
+    static const uint8_t zeros[PageSize] = {};
+    return std::memcmp(p, zeros, n) == 0;
+}
+
+// Like Sink::Append, but leaves out pages that are entirely zero.
+void AppendNonZero(Sink& sink, uint64_t addr, const uint8_t* data, size_t n, uint32_t prot) {
+    for (size_t p = 0; p < n; p += PageSize) {
+        const size_t m = std::min(PageSize, n - p);
+        if (!IsZeroPage(data + p, m)) {
+            sink.Append(addr + p, data + p, m, prot);
+        }
+    }
+}
+
 void Watcher(std::filesystem::path dir) {
     const std::filesystem::path trigger = dir / "trigger";
     for (;;) {
@@ -234,12 +249,12 @@ std::string DumpNow() {
         for (uint64_t off = 0; off < r.size && !capped; off += ReadChunk) {
             const size_t n = static_cast<size_t>(std::min<uint64_t>(ReadChunk, r.size - off));
             if (ReadSelf(r.base + off, buffer.data(), n)) {
-                sink.Append(r.base + off, buffer.data(), n, r.prot);
+                AppendNonZero(sink, r.base + off, buffer.data(), n, r.prot);
             } else {
                 for (size_t p = 0; p < n; p += PageSize) { // salvage what can be read
                     const size_t m = std::min(PageSize, n - p);
                     if (ReadSelf(r.base + off + p, buffer.data(), m)) {
-                        sink.Append(r.base + off + p, buffer.data(), m, r.prot);
+                        AppendNonZero(sink, r.base + off + p, buffer.data(), m, r.prot);
                     }
                 }
             }
