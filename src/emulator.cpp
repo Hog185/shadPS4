@@ -45,6 +45,7 @@
 #include "core/libraries/usbd/usbstorage.h"
 #include "core/linker.h"
 #include "core/memory.h"
+#include "core/ue4_memdump.h"
 #include "core/user_settings.h"
 #include "emulator.h"
 #include "video_core/cache_storage.h"
@@ -718,6 +719,8 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
             }
         });
     }
+
+    Core::Ue4MemDump::Start();
 
     linker->Execute(args);
 
