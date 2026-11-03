@@ -46,6 +46,7 @@
 #include "core/linker.h"
 #include "core/memory.h"
 #include "core/ue4_memdump.h"
+#include "core/ue4_oodle_hook.h"
 #include "core/user_settings.h"
 #include "emulator.h"
 #include "video_core/cache_storage.h"
@@ -721,6 +722,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     }
 
     Core::Ue4MemDump::Start();
+    Core::Ue4OodleHook::Start();
 
     linker->Execute(args);
 
