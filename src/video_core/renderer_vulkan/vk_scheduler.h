@@ -165,12 +165,18 @@ struct DynamicState {
     float line_width{};
     bool feedback_loop_enabled{};
 
+    vk::Pipeline graphics_pipeline{};
+    bool vertex_input_set{};
+
     /// Commits the dynamic state to the provided command buffer.
     void Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf);
 
-    /// Invalidates all dynamic state to be flushed into the next command buffer.
+    /// Invalidates all dynamic state and tracked bindings to be flushed into the next command
+    /// buffer.
     void Invalidate() {
         std::memset(&dirty_state, 0xFF, sizeof(dirty_state));
+        graphics_pipeline = vk::Pipeline{};
+        vertex_input_set = false;
     }
 
     void SetViewports(const Viewports& viewports_) {
