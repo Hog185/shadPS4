@@ -224,9 +224,9 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     const auto& fetch_shader = pipeline->GetFetchShader();
     const auto [vertex_offset, instance_offset] = GetDrawOffsets(regs, vs_info, fetch_shader);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    BindGraphicsPipeline(pipeline);
 
+    const auto cmdbuf = scheduler.CommandBuffer();
     if (is_indexed) {
         cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
                            s32(vertex_offset), instance_offset);
@@ -294,9 +294,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    BindGraphicsPipeline(pipeline);
 
+    const auto cmdbuf = scheduler.CommandBuffer();
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
 
@@ -462,6 +462,17 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     return true;
 }
 
+void Rasterizer::BindGraphicsPipeline(const GraphicsPipeline* pipeline) {
+    // Other graphics pipeline binds on this command buffer must call DynamicState::Invalidate().
+    auto& dynamic_state = scheduler.GetDynamicState();
+    const vk::Pipeline handle = pipeline->Handle();
+    if (dynamic_state.graphics_pipeline == handle) {
+        return;
+    }
+    dynamic_state.graphics_pipeline = handle;
+    scheduler.CommandBuffer().bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+}
+
 void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
     const auto& regs = liverpool->regs;
     VertexInputs<vk::VertexInputAttributeDescription2EXT> attributes;
@@ -472,9 +483,30 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
                               regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
 
     if (instance.IsVertexInputDynamicState()) {
-        // Update current vertex inputs.
-        const auto cmdbuf = scheduler.CommandBuffer();
-        cmdbuf.setVertexInputEXT(bindings, attributes);
+        // Vertex input persists across binds of dynamic-vertex-input pipelines, but a static one
+        // overwrites it, so DynamicState::Invalidate() must be called after binding one.
+        auto& dynamic_state = scheduler.GetDynamicState();
+        const bool same_bindings = std::ranges::equal(
+            bindings, last_vertex_bindings,
+            [](const vk::VertexInputBindingDescription2EXT& lhs,
+               const vk::VertexInputBindingDescription2EXT& rhs) {
+                return lhs.binding == rhs.binding && lhs.stride == rhs.stride &&
+                       lhs.inputRate == rhs.inputRate && lhs.divisor == rhs.divisor;
+            });
+        const bool same_attributes = std::ranges::equal(
+            attributes, last_vertex_attributes,
+            [](const vk::VertexInputAttributeDescription2EXT& lhs,
+               const vk::VertexInputAttributeDescription2EXT& rhs) {
+                return lhs.location == rhs.location && lhs.binding == rhs.binding &&
+                       lhs.format == rhs.format && lhs.offset == rhs.offset;
+            });
+        if (!dynamic_state.vertex_input_set || !same_bindings || !same_attributes) {
+            const auto cmdbuf = scheduler.CommandBuffer();
+            cmdbuf.setVertexInputEXT(bindings, attributes);
+            last_vertex_bindings = bindings;
+            last_vertex_attributes = attributes;
+            dynamic_state.vertex_input_set = true;
+        }
     }
 
     if (bindings.empty()) {
