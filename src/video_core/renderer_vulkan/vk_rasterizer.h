@@ -123,6 +123,7 @@ private:
     void BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding);
     bool BindResources(const Pipeline* pipeline);
 
+    void BindGraphicsPipeline(const GraphicsPipeline* pipeline);
     void BindVertexBuffers(const GraphicsPipeline* pipeline);
     void BindIndexBuffer(u32 index_offset = 0, bool is_indirect = false);
 
@@ -173,6 +174,9 @@ private:
     };
     std::vector<BoundBuffer> bound_buffers;
     std::vector<VideoCore::ImageId> bound_images;
+
+    VertexInputs<vk::VertexInputAttributeDescription2EXT> last_vertex_attributes;
+    VertexInputs<vk::VertexInputBindingDescription2EXT> last_vertex_bindings;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;
